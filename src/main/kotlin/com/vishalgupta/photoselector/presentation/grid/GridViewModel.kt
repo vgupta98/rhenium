@@ -84,7 +84,6 @@ data class GridUiState(
     // the always-visible "still grouping" cues (the determinate ring on the Similar tab here, and the
     // off-grid chip in the navigation host) regardless of [groupingMode].
     val similarityProgress: GroupingStatus? = null,
-    val toast: String? = null,
 ) {
     /** True when any grouping lens is active — drives the off-thread regroup and tile collapse. */
     val groupBursts: Boolean get() = groupingMode != GroupingMode.Off
@@ -188,6 +187,15 @@ class GridViewModel(
     // so the summary never spams on background reshapes.
     private val _groupingOutcomes = Channel<GroupingOutcome>(Channel.BUFFERED)
     val groupingOutcomes: Flow<GroupingOutcome> = _groupingOutcomes.receiveAsFlow()
+
+    // Result of a completed bulk/library action (export, copy, bulk file, delete) — a consume-once
+    // one-shot, same handoff shape as [toggleEvents]/[groupingOutcomes] and the browser's delete
+    // events. Modelled as a channel (not persistent state) so navigating away mid-toast can't cancel
+    // its dismissal and leave a stale message to resurrect on return. The grid VM is retained per
+    // scope, so a message emitted while the user is on another scope buffers and fires once on return
+    // — a fresh result surfacing, not a resurrected one.
+    private val _messages = Channel<String>(Channel.BUFFERED)
+    val messages: Flow<String> = _messages.receiveAsFlow()
 
     private var scrollSaveJob: Job? = null
     private var lastKnownIndex: FlatIndex? = null
@@ -737,7 +745,7 @@ class GridViewModel(
         if (ids.isEmpty()) return
         scope.launch {
             val added = categories.addMemberships(root, id, ids)
-            _state.update { it.copy(toast = bulkFileToast(name, requested = ids.size, added = added)) }
+            _messages.trySend(bulkFileToast(name, requested = ids.size, added = added))
         }
     }
 
@@ -765,7 +773,8 @@ class GridViewModel(
             } catch (ce: CancellationException) {
                 throw ce
             } catch (t: Throwable) {
-                _state.update { it.copy(isBusy = false, progressLabel = null, toast = "Delete failed: ${t.message}") }
+                _state.update { it.copy(isBusy = false, progressLabel = null) }
+                _messages.trySend("Delete failed: ${t.message}")
                 return@launch
             }
             val trashedIds = targets
@@ -797,9 +806,9 @@ class GridViewModel(
                     // coerced index, so focus would silently slide onto a different photo. Mirrors
                     // removePhotos exactly (its docstring promises this path behaves the same).
                     focusedIndex = refocus(singles, anchorId, st.focusedIndex),
-                    toast = deleteToast(report),
                 )
             }
+            _messages.trySend(deleteToast(report))
             // Respect the toolbar lens: re-collapse only when one is active, otherwise the grid
             // would silently regroup behind a control that reads "Off".
             if (groupingMode != GroupingMode.Off) regroup(photos, ids, groupingMode) else lastGroupedIds = ids
@@ -863,19 +872,13 @@ class GridViewModel(
             _state.update { it.copy(isBusy = true, progressLabel = "Writing list…") }
             try {
                 exportTxt.invoke(root, photos, destination)
-                _state.update {
-                    it.copy(
-                        isBusy = false,
-                        progressLabel = null,
-                        toast = "Saved ${photos.size} entries to ${destination.fileName}",
-                    )
-                }
+                _state.update { it.copy(isBusy = false, progressLabel = null) }
+                _messages.trySend("Saved ${photos.size} entries to ${destination.fileName}")
             } catch (ce: CancellationException) {
                 throw ce
             } catch (t: Throwable) {
-                _state.update {
-                    it.copy(isBusy = false, progressLabel = null, toast = "Export failed: ${t.message}")
-                }
+                _state.update { it.copy(isBusy = false, progressLabel = null) }
+                _messages.trySend("Export failed: ${t.message}")
             }
         }
     }
@@ -897,21 +900,15 @@ class GridViewModel(
                 ) { done, total ->
                     _state.update { it.copy(progressLabel = "$done / $total") }
                 }
-                _state.update {
-                    it.copy(isBusy = false, progressLabel = null, toast = buildReportToast(report))
-                }
+                _state.update { it.copy(isBusy = false, progressLabel = null) }
+                _messages.trySend(buildReportToast(report))
             } catch (ce: CancellationException) {
                 throw ce
             } catch (t: Throwable) {
-                _state.update {
-                    it.copy(isBusy = false, progressLabel = null, toast = "Copy failed: ${t.message}")
-                }
+                _state.update { it.copy(isBusy = false, progressLabel = null) }
+                _messages.trySend("Copy failed: ${t.message}")
             }
         }
-    }
-
-    fun dismissToast() {
-        _state.update { it.copy(toast = null) }
     }
 
     private fun buildReportToast(report: CopyReport): String {

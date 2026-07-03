@@ -151,6 +151,18 @@ fun GridScreen(
         }
     }
 
+    // The bulk/library action result (export, copy, bulk file, delete) — a consume-once one-shot,
+    // collected here and shown as a transient pill. Modelled off [messages] (a channel) rather than
+    // persistent state, so navigating away mid-toast can't strand a stale message that re-shows on return.
+    var resultToast by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(viewModel) {
+        viewModel.messages.collectLatest { message ->
+            resultToast = message
+            delay(TOAST_DURATION_MS)
+            resultToast = null
+        }
+    }
+
     GridScreen(
         state = state,
         initialScrollIndex = initialScrollIndex,
@@ -159,6 +171,7 @@ fun GridScreen(
         revealPhotoId = revealPhotoId,
         categoryToast = categoryToast,
         groupingNotice = groupingNotice,
+        resultToast = resultToast,
         railCollapsed = railCollapsed,
         onToggleRail = onToggleRail,
         onTileClick = onTileClick,
@@ -186,7 +199,6 @@ fun GridScreen(
                 viewModel.copyTo(dir, policy)
             }
         },
-        onDismissToast = viewModel::dismissToast,
         onFirstVisibleItemChanged = viewModel::onFirstVisibleItemChanged,
         onSelectGroupingMode = viewModel::setGroupingMode,
         onToggleBurstExpansion = viewModel::toggleBurstExpansion,
@@ -247,7 +259,6 @@ fun GridScreen(
     onToggleCustomCategoryAtFocus: (slot: Int) -> Unit,
     onExportTxt: () -> Unit,
     onCopyToFolder: (ConflictPolicy) -> Unit,
-    onDismissToast: () -> Unit,
     onFirstVisibleItemChanged: (FlatIndex) -> Unit = {},
     onSelectGroupingMode: (GroupingMode) -> Unit = {},
     onToggleBurstExpansion: (PhotoId) -> Unit = {},
@@ -258,6 +269,9 @@ fun GridScreen(
     // A one-shot "what the lens found" notice (summary or empty result), already rendered to copy by
     // the stateful host from a [GroupingOutcome]. Null when there's nothing to announce.
     groupingNotice: String? = null,
+    // The consume-once result of a bulk/library action (export, copy, bulk file, delete), collected
+    // from [GridViewModel.messages] and cleared on a timer by the stateful host. Null when idle.
+    resultToast: String? = null,
     // Multi-select plumbing. Defaulted so the stateless screen can be hosted (tests, previews)
     // without wiring selection — a grid with no selection handlers simply never selects.
     onToggleSelection: (TileIndex) -> Unit = {},
@@ -367,13 +381,6 @@ fun GridScreen(
 
     LaunchedEffect(Unit) {
         focusRequester.requestFocus()
-    }
-
-    LaunchedEffect(state.toast) {
-        if (state.toast != null) {
-            delay(TOAST_DURATION_MS)
-            onDismissToast()
-        }
     }
 
     // The viewport re-pin across a grouping reshape - the cold settle and a lens switch - lives in one
@@ -715,7 +722,7 @@ fun GridScreen(
             // cap notice) — rendered in the app's pill chrome, not a stock Material snackbar, so all
             // of the grid's transient feedback reads as one family.
             GridMessagePill(
-                message = state.toast,
+                message = resultToast,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(bottom = AppTheme.spacing.lg),
@@ -983,7 +990,7 @@ internal fun groupingNoticeText(outcome: GroupingOutcome): String {
  * Result/notice pill for bulk and library-level actions (export saved, copy report, the survey
  * cap notice). Uses the shared [PillToast] chrome and the same latch + fade as [GridTogglePill], so
  * the grid's transient feedback is one consistent family rather than a stock Material snackbar.
- * The caller drives [message] from `state.toast` and clears it on a timer.
+ * The caller drives [message] from the one-shot [GridViewModel.messages] flow and clears it on a timer.
  */
 @Composable
 private fun GridMessagePill(message: String?, modifier: Modifier = Modifier) {

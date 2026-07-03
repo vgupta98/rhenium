@@ -94,7 +94,6 @@ class GridKeyboardTest {
                         onToggleCustomCategoryAtFocus = {},
                         onExportTxt = {},
                         onCopyToFolder = {},
-                        onDismissToast = {},
                         imageLoader = noOpImageLoader,
                     )
                 }
@@ -132,7 +131,6 @@ class GridKeyboardTest {
                         onToggleCustomCategoryAtFocus = { slots += it },
                         onExportTxt = {},
                         onCopyToFolder = {},
-                        onDismissToast = {},
                         imageLoader = noOpImageLoader,
                     )
                 }
@@ -171,7 +169,6 @@ class GridKeyboardTest {
             onToggleCustomCategoryAtFocus = {},
             onExportTxt = {},
             onCopyToFolder = {},
-            onDismissToast = {},
             imageLoader = noOpImageLoader,
             onSelectAll = onSelectAll,
             onClearSelection = onClearSelection,
@@ -396,7 +393,6 @@ class GridKeyboardTest {
                         onToggleCustomCategoryAtFocus = {},
                         onExportTxt = {},
                         onCopyToFolder = {},
-                        onDismissToast = {},
                         imageLoader = noOpImageLoader,
                         onInspectSelection = { indices, _ -> captured = indices },
                     )
@@ -434,7 +430,6 @@ class GridKeyboardTest {
                         onToggleCustomCategoryAtFocus = {},
                         onExportTxt = {},
                         onCopyToFolder = {},
-                        onDismissToast = {},
                         imageLoader = noOpImageLoader,
                         onSelectGroupingMode = { picked = it },
                     )
@@ -505,7 +500,6 @@ class GridKeyboardTest {
                         onToggleCustomCategoryAtFocus = {},
                         onExportTxt = {},
                         onCopyToFolder = {},
-                        onDismissToast = {},
                         imageLoader = bitmapImageLoader,
                         onToggleBurstExpansion = { id ->
                             toggles += id.value
@@ -582,7 +576,6 @@ class GridKeyboardTest {
                         onToggleCustomCategoryAtFocus = {},
                         onExportTxt = {},
                         onCopyToFolder = {},
-                        onDismissToast = {},
                         imageLoader = bitmapImageLoader,
                         onClearSelection = { state = state.copy(selection = emptySet()) },
                         onDeleteSelection = {
@@ -653,7 +646,6 @@ class GridKeyboardTest {
                         onToggleCustomCategoryAtFocus = {},
                         onExportTxt = {},
                         onCopyToFolder = {},
-                        onDismissToast = {},
                         imageLoader = noOpImageLoader,
                     )
                 }
@@ -703,7 +695,6 @@ class GridKeyboardTest {
                         onToggleCustomCategoryAtFocus = {},
                         onExportTxt = {},
                         onCopyToFolder = {},
-                        onDismissToast = {},
                         imageLoader = noOpImageLoader,
                     )
                 }
@@ -756,7 +747,6 @@ class GridKeyboardTest {
                         onToggleCustomCategoryAtFocus = {},
                         onExportTxt = {},
                         onCopyToFolder = {},
-                        onDismissToast = {},
                         imageLoader = noOpImageLoader,
                     )
                 }
@@ -804,7 +794,6 @@ class GridKeyboardTest {
                         onToggleCustomCategoryAtFocus = {},
                         onExportTxt = {},
                         onCopyToFolder = {},
-                        onDismissToast = {},
                         imageLoader = noOpImageLoader,
                     )
                 }
@@ -858,7 +847,6 @@ class GridKeyboardTest {
                         onToggleCustomCategoryAtFocus = {},
                         onExportTxt = {},
                         onCopyToFolder = {},
-                        onDismissToast = {},
                         onFirstVisibleItemChanged = { reported += it },
                         imageLoader = noOpImageLoader,
                     )
@@ -931,7 +919,6 @@ class GridKeyboardTest {
                         onToggleCustomCategoryAtFocus = {},
                         onExportTxt = {},
                         onCopyToFolder = {},
-                        onDismissToast = {},
                         onFirstVisibleItemChanged = { reportedTopFlat = it.value },
                         imageLoader = noOpImageLoader,
                         // Mirror the view model: the Time lens collapses the two bursts, Off is flat singles.
@@ -1012,7 +999,6 @@ class GridKeyboardTest {
                         onToggleCustomCategoryAtFocus = {},
                         onExportTxt = {},
                         onCopyToFolder = {},
-                        onDismissToast = {},
                         onFirstVisibleItemChanged = { reportedTopFlat = it.value },
                         imageLoader = noOpImageLoader,
                         onSelectGroupingMode = { mode ->
@@ -1098,7 +1084,6 @@ class GridKeyboardTest {
                         onToggleCustomCategoryAtFocus = {},
                         onExportTxt = {},
                         onCopyToFolder = {},
-                        onDismissToast = {},
                         onFirstVisibleItemChanged = { reportedTopFlat = it.value },
                         imageLoader = noOpImageLoader,
                         onSelectGroupingMode = { mode ->
@@ -1199,7 +1184,6 @@ class GridKeyboardTest {
                         onToggleCustomCategoryAtFocus = {},
                         onExportTxt = {},
                         onCopyToFolder = {},
-                        onDismissToast = {},
                         onFirstVisibleItemChanged = { reportedTopFlat = it.value },
                         imageLoader = noOpImageLoader,
                         onSelectGroupingMode = { m ->

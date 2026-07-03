@@ -107,6 +107,7 @@ class ScreenSplitScreenshotTest {
         state: GridUiState,
         onBack: (() -> Unit)?,
         categoryToast: CategoryToggle? = null,
+        resultToast: String? = null,
         modifier: Modifier = Modifier,
     ) {
         GridScreen(
@@ -120,9 +121,9 @@ class ScreenSplitScreenshotTest {
             onToggleCustomCategoryAtFocus = {},
             onExportTxt = {},
             onCopyToFolder = {},
-            onDismissToast = {},
             imageLoader = noOpImageLoader,
             categoryToast = categoryToast,
+            resultToast = resultToast,
             modifier = modifier,
         )
     }
@@ -380,8 +381,8 @@ class ScreenSplitScreenshotTest {
                             photos = manyPhotos,
                             scope = CategoryScope.AllPhotos,
                             categories = categories,
-                            toast = "Select up to 12 photos to compare side by side",
                         ),
+                        resultToast = "Select up to 12 photos to compare side by side",
                         onBack = null,
                     )
                 }

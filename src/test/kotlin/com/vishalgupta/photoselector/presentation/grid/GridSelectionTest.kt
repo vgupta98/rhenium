@@ -496,7 +496,8 @@ class GridSelectionTest {
         vm.toggleSelection(TileIndex(5))
         vm.deleteSelection()
         advanceUntilIdle()
-        assertTrue(vm.state.value.toast != null && !vm.state.value.isBusy)
+        assertNotNull(vm.messages.first())
+        assertTrue(!vm.state.value.isBusy)
 
         // Virtual time has run every launched coroutine to completion, so a buggy off-thread regroup
         // would already have collapsed the tiles. It didn't: the frames stay flat.
@@ -520,7 +521,8 @@ class GridSelectionTest {
         vm.toggleSelection(TileIndex(1)) // display tile 1 == p1, the burst's second frame
         vm.deleteSelection()
         advanceUntilIdle()
-        assertTrue(vm.state.value.toast != null && !vm.state.value.isBusy)
+        assertNotNull(vm.messages.first())
+        assertTrue(!vm.state.value.isBusy)
 
         // p1 gone, p0 survives alone: the burst falls below two frames, so it must regroup to a Single
         // (BurstGrouper requires >= 2). No burst remains, and p0 + the four solos are five tiles.
@@ -543,12 +545,37 @@ class GridSelectionTest {
         vm.toggleSelection(TileIndex(5))
         vm.fileSelectionIntoCustom(0) // slot 0 == "Selects"
 
-        // The bulk file confirms via a toast; settle it, then assert the single batched call.
+        // The bulk file confirms via a one-shot message; settle it, then assert the single batched call.
         advanceUntilIdle()
-        assertTrue(vm.state.value.toast != null)
+        assertNotNull(vm.messages.first())
         assertEquals(1, repo.addCalls.size)
         assertEquals(selectsId, repo.addCalls.single().first)
         assertEquals(setOf(photos[0].id, photos[3].id, photos[5].id), repo.addCalls.single().second)
+
+        vm.onClear()
+    }
+
+    @Test
+    fun messages_areConsumeOnceAndDoNotReplayToALaterCollector() = runTest {
+        // The result feedback is a one-shot channel event, not persistent state: it fires exactly once
+        // and is gone. This pins the fix for the "navigate away mid-toast, come back to a resurrected
+        // stale toast" bug — a consumed message can never replay.
+        val vm = viewModel(FakeCategoriesRepository(categories), dispatcher = StandardTestDispatcher(testScheduler))
+        advanceUntilIdle()
+
+        vm.toggleSelection(TileIndex(0))
+        vm.fileSelectionIntoFavourites()
+        advanceUntilIdle()
+
+        // The action surfaced exactly one message.
+        assertNotNull(vm.messages.first())
+
+        // It was consumed once: a fresh collector over a settled window sees nothing (no replay).
+        var replayed: String? = null
+        val watcher = launch { vm.messages.collect { replayed = it } }
+        advanceUntilIdle()
+        watcher.cancel()
+        assertNull("a consumed message must not replay to a later collector", replayed)
 
         vm.onClear()
     }
@@ -567,12 +594,13 @@ class GridSelectionTest {
         vm.deleteSelection()
 
         advanceUntilIdle()
+        val message = vm.messages.first()
         val st = vm.state.value
-        assertTrue(st.toast != null && !st.isBusy)
+        assertTrue(!st.isBusy)
         assertEquals("two photos left the visible list", photos.size - 2, st.photos.size)
         assertTrue(st.photos.none { it.id == photos[0].id || it.id == photos[3].id })
         assertTrue("selection cleared after delete", st.selection.isEmpty())
-        assertTrue("toast names the Trash, got: ${st.toast}", st.toast!!.contains("Trash"))
+        assertTrue("message names the Trash, got: $message", message.contains("Trash"))
 
         // Purged from every category, and the container was told which ids went.
         val members = repo.observeMemberships(root).value[selectsId].orEmpty()
@@ -599,11 +627,12 @@ class GridSelectionTest {
         vm.deleteSelection()
 
         advanceUntilIdle()
+        val message = vm.messages.first()
         val st = vm.state.value
-        assertTrue(st.toast != null && !st.isBusy)
+        assertTrue(!st.isBusy)
         assertEquals("only the successfully trashed photo left", photos.size - 1, st.photos.size)
         assertTrue("the failed photo stays put", st.photos.any { it.id == photos[0].id })
-        assertTrue("toast reports the failure, got: ${st.toast}", st.toast!!.contains("failed"))
+        assertTrue("message reports the failure, got: $message", message.contains("failed"))
 
         vm.onClear()
     }
@@ -624,7 +653,8 @@ class GridSelectionTest {
         vm.toggleSelection(TileIndex(1)) // select p1, an earlier tile
         vm.deleteSelection()
         advanceUntilIdle()
-        assertTrue(vm.state.value.toast != null && !vm.state.value.isBusy)
+        assertNotNull(vm.messages.first())
+        assertTrue(!vm.state.value.isBusy)
 
         val st = vm.state.value
         assertEquals(listOf("p0", "p2", "p3", "p4", "p5"), st.photos.map { it.id.value })
