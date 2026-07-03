@@ -21,7 +21,6 @@ import com.vishalgupta.photoselector.domain.repository.TrashReport
 import com.vishalgupta.photoselector.domain.repository.XmpReport
 import com.vishalgupta.photoselector.domain.usecase.CopyPhotosToFolderUseCase
 import com.vishalgupta.photoselector.domain.usecase.ExportPhotosTxtUseCase
-import com.vishalgupta.photoselector.domain.usecase.ExportPhotosXmpUseCase
 import com.vishalgupta.photoselector.domain.usecase.MovePhotosToTrashUseCase
 import com.vishalgupta.photoselector.presentation.common.GroupingCoordinator
 import com.vishalgupta.photoselector.presentation.common.GroupingMode
@@ -164,7 +163,6 @@ class GridSelectionTest {
         lastViewedPhotoId = null,
         categories = repo,
         exportTxt = ExportPhotosTxtUseCase(exporter),
-        exportXmp = ExportPhotosXmpUseCase(exporter),
         copyToFolder = CopyPhotosToFolderUseCase(exporter),
         moveToTrash = MovePhotosToTrashUseCase(trash),
         imageLoader = noOpImageLoader,
@@ -202,36 +200,6 @@ class GridSelectionTest {
         assertTrue(vm.state.value.selection.isEmpty())
 
         vm.onClear()
-    }
-
-    @Test
-    fun exportXmp_reportsWrittenAndUnsupportedInTheToast() = runTest {
-        // A report with a mix of outcomes drives the summary toast: written count, cleared count, and
-        // the honest "skipped (JPEG/HEIC ...)" line for the unsupported non-RAW photos.
-        val exporter = object : PhotoExporter by noOpExporter {
-            override suspend fun exportXmpSidecars(
-                root: RootFolder,
-                photos: List<Photo>,
-                favouriteIds: Set<PhotoId>,
-                rejectedIds: Set<PhotoId>,
-                onProgress: (written: Int, total: Int) -> Unit,
-            ): XmpReport = XmpReport(written = 2, cleared = 1, unsupported = 3, failed = emptyList())
-        }
-        val vm = viewModel(
-            FakeCategoriesRepository(categories),
-            dispatcher = StandardTestDispatcher(testScheduler),
-            exporter = exporter,
-        )
-        advanceUntilIdle()
-
-        vm.exportXmp()
-        advanceUntilIdle()
-
-        val toast = vm.messages.first()
-        assertTrue("export settled", !vm.state.value.isBusy)
-        assertTrue("toast reports the writes, got: $toast", toast.contains("Wrote 2 XMP sidecars"))
-        assertTrue("toast reports the clear, got: $toast", toast.contains("1 cleared"))
-        assertTrue("toast is honest about the skip, got: $toast", toast.contains("3 skipped (JPEG/HEIC"))
     }
 
     @Test

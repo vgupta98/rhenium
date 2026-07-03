@@ -458,7 +458,6 @@ class AppContainer {
             lastViewedPhotoId = lastViewedPhotoId,
             categories = categoriesRepository,
             exportTxt = exportTxtUseCase,
-            exportXmp = exportXmpUseCase,
             copyToFolder = copyPhotosUseCase,
             moveToTrash = movePhotosToTrashUseCase,
             imageLoader = imageLoader,

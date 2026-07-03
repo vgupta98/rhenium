@@ -200,9 +200,6 @@ fun GridScreen(
                 viewModel.copyTo(dir, policy)
             }
         },
-        // XMP sidecars are written next to the originals (where a DAM looks for them), so unlike the
-        // .txt / copy exports there is no destination to pick — fire straight through.
-        onExportXmp = viewModel::exportXmp,
         onFirstVisibleItemChanged = viewModel::onFirstVisibleItemChanged,
         onSelectGroupingMode = viewModel::setGroupingMode,
         onToggleBurstExpansion = viewModel::toggleBurstExpansion,
@@ -233,7 +230,6 @@ fun GridScreen(
                 viewModel.copySelectionTo(dir, policy)
             }
         },
-        onExportSelectionXmp = viewModel::exportSelectionXmp,
     )
 }
 
@@ -263,7 +259,6 @@ fun GridScreen(
     onToggleRejectAtFocus: () -> Unit = {},
     onToggleCustomCategoryAtFocus: (slot: Int) -> Unit,
     onExportTxt: () -> Unit,
-    onExportXmp: () -> Unit = {},
     onCopyToFolder: (ConflictPolicy) -> Unit,
     onFirstVisibleItemChanged: (FlatIndex) -> Unit = {},
     onSelectGroupingMode: (GroupingMode) -> Unit = {},
@@ -289,7 +284,6 @@ fun GridScreen(
     onFileSelectionIntoCustom: (slot: Int) -> Unit = {},
     onDeleteSelection: () -> Unit = {},
     onExportSelectionTxt: () -> Unit = {},
-    onExportSelectionXmp: () -> Unit = {},
     onCopySelection: (ConflictPolicy) -> Unit = {},
     onInspectSelection: (indices: List<Int>, returnScrollIndex: Int) -> Unit = { _, _ -> },
     // The scrollbar's drag interactions, hoisted so a test can drive a scrollbar-drag-during-settle
@@ -554,7 +548,6 @@ fun GridScreen(
                 onFileIntoRejects = onFileSelectionIntoRejects,
                 onFileIntoCustom = onFileSelectionIntoCustom,
                 onExportSelectionTxt = onExportSelectionTxt,
-                onExportSelectionXmp = onExportSelectionXmp,
                 onCopySelection = onCopySelection,
                 onDeleteSelection = { confirmingDelete = true },
                 onClearSelection = onClearSelection,
@@ -568,7 +561,6 @@ fun GridScreen(
                 railCollapsed = railCollapsed,
                 onToggleRail = onToggleRail,
                 onExportTxt = onExportTxt,
-                onExportXmp = onExportXmp,
                 onCopyToFolder = onCopyToFolder,
                 groupingMode = state.groupingMode,
                 onSelectGroupingMode = onSelectGroupingModeAnchored,

@@ -40,7 +40,6 @@ fun GridTopBar(
     railCollapsed: Boolean,
     onToggleRail: () -> Unit,
     onExportTxt: () -> Unit,
-    onExportXmp: () -> Unit,
     onCopyToFolder: (ConflictPolicy) -> Unit,
     groupingMode: GroupingMode,
     onSelectGroupingMode: (GroupingMode) -> Unit,
@@ -94,7 +93,6 @@ fun GridTopBar(
             ExportMenu(
                 enabled = hasPhotos,
                 onExportTxt = onExportTxt,
-                onExportXmp = onExportXmp,
                 onCopyToFolder = onCopyToFolder,
             )
         }
