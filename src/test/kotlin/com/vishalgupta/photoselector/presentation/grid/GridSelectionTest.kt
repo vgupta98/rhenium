@@ -18,6 +18,7 @@ import com.vishalgupta.photoselector.domain.repository.CopyReport
 import com.vishalgupta.photoselector.domain.repository.PhotoExporter
 import com.vishalgupta.photoselector.domain.repository.PhotoTrash
 import com.vishalgupta.photoselector.domain.repository.TrashReport
+import com.vishalgupta.photoselector.domain.repository.XmpReport
 import com.vishalgupta.photoselector.domain.usecase.CopyPhotosToFolderUseCase
 import com.vishalgupta.photoselector.domain.usecase.ExportPhotosTxtUseCase
 import com.vishalgupta.photoselector.domain.usecase.MovePhotosToTrashUseCase
@@ -88,6 +89,14 @@ class GridSelectionTest {
             policy: ConflictPolicy,
             onProgress: (copied: Int, total: Int) -> Unit,
         ): CopyReport = CopyReport(0, 0, emptyList())
+
+        override suspend fun exportXmpSidecars(
+            root: RootFolder,
+            photos: List<Photo>,
+            favouriteIds: Set<PhotoId>,
+            rejectedIds: Set<PhotoId>,
+            onProgress: (written: Int, total: Int) -> Unit,
+        ): XmpReport = XmpReport(0, 0, 0, emptyList())
     }
 
     private val noOpTrash = object : PhotoTrash {
@@ -146,14 +155,15 @@ class GridSelectionTest {
         // off-thread regroup, so a test settles the grid with advanceUntilIdle() in virtual time.
         // Left null only by the blocking-gate tests, which need the real Swing/IO dispatchers.
         dispatcher: CoroutineDispatcher? = null,
+        exporter: PhotoExporter = noOpExporter,
     ): GridViewModel = GridViewModel(
         root = RootFolder(Path.of("/photos")),
         allPhotos = photos,
         categoryScope = CategoryScope.AllPhotos,
         lastViewedPhotoId = null,
         categories = repo,
-        exportTxt = ExportPhotosTxtUseCase(noOpExporter),
-        copyToFolder = CopyPhotosToFolderUseCase(noOpExporter),
+        exportTxt = ExportPhotosTxtUseCase(exporter),
+        copyToFolder = CopyPhotosToFolderUseCase(exporter),
         moveToTrash = MovePhotosToTrashUseCase(trash),
         imageLoader = noOpImageLoader,
         captureMetadataSource = metadata,

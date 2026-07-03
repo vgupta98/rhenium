@@ -8,14 +8,17 @@ import com.vishalgupta.photoselector.domain.model.RootFolder
 import com.vishalgupta.photoselector.domain.repository.CategoriesRepository
 import com.vishalgupta.photoselector.domain.usecase.MovePhotosToTrashUseCase
 import com.vishalgupta.photoselector.presentation.StateHolder
+import com.vishalgupta.photoselector.presentation.common.XmpSyncCoordinator
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
@@ -46,12 +49,24 @@ class LibraryRailViewModel(
     private val moveToTrash: MovePhotosToTrashUseCase,
     // The current scan for [root], so the rejected [PhotoId]s can be resolved to [Photo]s to trash.
     private val photosForRoot: () -> List<Photo>,
+    // Live RAW XMP-sidecar sync, owned per root by the container (like the grouping coordinator). The
+    // rail footer re-exposes its state + toggle. Defaulted so tests that don't exercise sync omit it.
+    private val xmpSync: XmpSyncCoordinator? = null,
     // Drops the trashed photos from the container's scan snapshot + every retained grid, so screens
     // built or returned to after the sweep are without them. Same hook the per-photo deletes use.
     private val onPhotosDeleted: (Set<PhotoId>) -> Unit = {},
     parentJob: Job? = null,
     dispatcher: CoroutineDispatcher = Dispatchers.Swing,
 ) : StateHolder(parentJob, dispatcher) {
+
+    /** Live XMP-sync footer state (enabled + non-RAW skip count), mirrored from the coordinator. */
+    val xmpSyncState: StateFlow<XmpSyncCoordinator.State> =
+        xmpSync?.state ?: MutableStateFlow(XmpSyncCoordinator.State(enabled = false)).asStateFlow()
+
+    /** Toggles live XMP sidecar sync for this root (footer switch). No-op if sync isn't wired. */
+    fun toggleXmpSync() {
+        xmpSync?.toggle()
+    }
 
     // One-shot result of a reject sweep, surfaced by [App] as a transient pill.
     private val _sweepEvents = Channel<String>(Channel.BUFFERED)

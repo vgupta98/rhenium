@@ -250,6 +250,41 @@ class GridBurstScreenshotTest {
         rule.dumpScreenshot("grid-similarity-coachmark")
     }
 
+    @Test fun `an idle grid renders the first row flush under the toolbar`() {
+        // The baseline for the busy-overlay pair: no busy strip, so the first tile row sits directly
+        // under the toolbar. Eyeball build/screenshots/grid-busy-idle.png against grid-busy-active.png
+        // - the tile rows must sit at the SAME vertical position in both (the busy strip overlays the
+        // top of the grid rather than shoving it down, which used to flicker on every export).
+        renderGrid(
+            GridUiState(
+                photos = photos,
+                groups = photos.map(PhotoGroup::Single),
+                groupingMode = GroupingMode.Off,
+                scope = CategoryScope.AllPhotos,
+                categories = listOf(Category.favourites()),
+            ),
+        )
+        rule.dumpScreenshot("grid-busy-idle")
+    }
+
+    @Test fun `a busy export overlays the strip on the grid without reflowing the rows`() {
+        // isBusy true (an export in flight): the "Writing XMP sidecars…" strip fades in over the top
+        // of the grid. Eyeball build/screenshots/grid-busy-active.png - the strip sits atop the first
+        // row, and the rows are NOT pushed down relative to grid-busy-idle.png.
+        renderGrid(
+            GridUiState(
+                photos = photos,
+                groups = photos.map(PhotoGroup::Single),
+                groupingMode = GroupingMode.Off,
+                isBusy = true,
+                progressLabel = "Writing XMP sidecars…",
+                scope = CategoryScope.AllPhotos,
+                categories = listOf(Category.favourites()),
+            ),
+        )
+        rule.dumpScreenshot("grid-busy-active")
+    }
+
     private fun renderGrid(state: GridUiState, groupingNotice: String? = null) {
         rule.setContent {
             AppTheme {

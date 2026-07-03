@@ -5,9 +5,11 @@ import com.vishalgupta.photoselector.data.browse.JsonBrowsePositionRepository
 import com.vishalgupta.photoselector.data.export.CompositePhotoExporter
 import com.vishalgupta.photoselector.data.export.CopyPhotoExporter
 import com.vishalgupta.photoselector.data.export.TxtPhotoExporter
+import com.vishalgupta.photoselector.data.export.XmpSidecarPhotoExporter
 import com.vishalgupta.photoselector.data.categories.JsonCategoriesRepository
 import com.vishalgupta.photoselector.data.filesystem.FileSystemPhotoRepository
 import com.vishalgupta.photoselector.data.prefs.JsonAppPreferences
+import com.vishalgupta.photoselector.data.prefs.JsonXmpSyncPreferences
 import com.vishalgupta.photoselector.data.update.HttpUpdateRepository
 import com.vishalgupta.photoselector.data.ai.CachingPhotoGrouper
 import com.vishalgupta.photoselector.data.ai.DownscaleGrayEmbeddingModel
@@ -45,17 +47,20 @@ import com.vishalgupta.photoselector.domain.repository.BrowsePositionRepository
 import com.vishalgupta.photoselector.domain.repository.PhotoExporter
 import com.vishalgupta.photoselector.domain.repository.PhotoRepository
 import com.vishalgupta.photoselector.domain.repository.PhotoTrash
+import com.vishalgupta.photoselector.domain.repository.XmpSyncPreferences
 import com.vishalgupta.photoselector.domain.update.AppVersion
 import com.vishalgupta.photoselector.domain.update.CheckForUpdateUseCase
 import com.vishalgupta.photoselector.domain.update.UpdateRepository
 import com.vishalgupta.photoselector.domain.update.rolloutBucket
 import com.vishalgupta.photoselector.domain.usecase.CopyPhotosToFolderUseCase
 import com.vishalgupta.photoselector.domain.usecase.ExportPhotosTxtUseCase
+import com.vishalgupta.photoselector.domain.usecase.ExportPhotosXmpUseCase
 import com.vishalgupta.photoselector.domain.usecase.MovePhotosToTrashUseCase
 import com.vishalgupta.photoselector.domain.usecase.ScanRootFolderUseCase
 import com.vishalgupta.photoselector.presentation.browser.BrowserViewModel
 import com.vishalgupta.photoselector.presentation.common.GroupingCoordinator
 import com.vishalgupta.photoselector.presentation.common.GroupingMode
+import com.vishalgupta.photoselector.presentation.common.XmpSyncCoordinator
 import com.vishalgupta.photoselector.presentation.common.MacSystemActions
 import com.vishalgupta.photoselector.presentation.common.SystemActions
 import com.vishalgupta.photoselector.presentation.grid.GridViewModel
@@ -224,6 +229,9 @@ class AppContainer {
     // cache dir, written through the shared AtomicJsonWriter.
     private val appPreferences: AppPreferencesRepository =
         JsonAppPreferences(cacheDir.resolve("preferences.json"), json)
+    // Per-root "keep RAW XMP sidecars in sync" toggle, persisted in a per-root dotfile through the same
+    // shared AtomicJsonWriter as categories/position (not the global cache-dir preferences.json).
+    private val xmpSyncPreferences: XmpSyncPreferences = JsonXmpSyncPreferences(json)
 
     // Notify-only update checker. One shared HttpClient (the app's only network use) reads the hosted
     // manifest; the use case decides eligibility. The manifest URL is baked into BuildConfig at build time.
@@ -234,11 +242,13 @@ class AppContainer {
         HttpUpdateRepository(BuildConfig.UPDATE_MANIFEST_URL, json, httpClient)
     private val checkForUpdateUseCase = CheckForUpdateUseCase(updateRepository)
 
-    private val exporter: PhotoExporter = CompositePhotoExporter(TxtPhotoExporter(), CopyPhotoExporter())
+    private val exporter: PhotoExporter =
+        CompositePhotoExporter(TxtPhotoExporter(), CopyPhotoExporter(), XmpSidecarPhotoExporter())
     private val photoTrash: PhotoTrash = DesktopPhotoTrash()
 
     private val scanUseCase = ScanRootFolderUseCase(photoRepository)
     private val exportTxtUseCase = ExportPhotosTxtUseCase(exporter)
+    private val exportXmpUseCase = ExportPhotosXmpUseCase(exporter)
     private val copyPhotosUseCase = CopyPhotosToFolderUseCase(exporter)
     private val movePhotosToTrashUseCase = MovePhotosToTrashUseCase(photoTrash)
 
@@ -259,6 +269,11 @@ class AppContainer {
     // per *root* — the navigation host mounts it outside the per-scope retention key, so one instance
     // serves every scope of a root and survives category switches. Cleared on a root change.
     private val retainedRails = mutableMapOf<Path, LibraryRailViewModel>()
+
+    // Live XMP-sidecar sync is per root (a folder-level cull decision), so its coordinator is kept per
+    // root alongside the rail — one instance owns the reconcile + live delta writes and the rail footer
+    // reads its state. Parented to the folder job; reset + dropped on a root change.
+    private val retainedXmpSync = mutableMapOf<Path, XmpSyncCoordinator>()
 
     // The grouping lens the user last picked, remembered for the session so the first grid built for
     // each (root, scope) opens in that lens rather than the default. Retained grids keep their own
@@ -474,8 +489,27 @@ class AppContainer {
                 categories = categoriesRepository,
                 moveToTrash = movePhotosToTrashUseCase,
                 photosForRoot = { photosFor(root) },
+                xmpSync = xmpSyncCoordinator(root),
                 onPhotosDeleted = { ids -> removeScannedPhotos(ids) },
                 parentJob = folderJob,
+            )
+        }
+
+    /**
+     * The live XMP-sidecar sync coordinator for [root], reused for the session. Owns the enable
+     * reconcile + live delta writes and the persisted per-root toggle; the rail footer drives it.
+     * Parented to the folder job, so a root change tears it down (and [resetForNewRoot] resets it).
+     */
+    private fun xmpSyncCoordinator(root: RootFolder): XmpSyncCoordinator =
+        retainedXmpSync.getOrPut(root.path) {
+            XmpSyncCoordinator(
+                root = root,
+                categories = categoriesRepository,
+                exportXmp = exportXmpUseCase,
+                preferences = xmpSyncPreferences,
+                photosForRoot = { photosFor(root) },
+                parentJob = folderJob,
+                dispatcher = Dispatchers.IO,
             )
         }
 
@@ -487,6 +521,10 @@ class AppContainer {
         // Rails hold no pending writes to flush; folderJob.cancel below tears their scopes down, so
         // just drop the references for the new root.
         retainedRails.clear()
+        // Stop any in-flight XMP sync and drop the per-root coordinators; folderJob.cancel tears their
+        // scopes down too, but reset() cancels the observe/reconcile promptly and clears surfaced state.
+        retainedXmpSync.values.forEach { it.reset() }
+        retainedXmpSync.clear()
         // Drop any in-flight background Similarity pass and clear its progress; the coordinator object
         // itself stays (the host collects its flow), only the per-root work is reset.
         groupingCoordinator.reset()

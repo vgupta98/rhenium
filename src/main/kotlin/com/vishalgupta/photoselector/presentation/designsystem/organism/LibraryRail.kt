@@ -20,6 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.PhotoLibrary
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
@@ -48,6 +49,7 @@ import com.vishalgupta.photoselector.presentation.designsystem.molecule.Category
 import com.vishalgupta.photoselector.presentation.designsystem.molecule.CategoryNameDialog
 import com.vishalgupta.photoselector.presentation.designsystem.molecule.ChangeFolderButton
 import com.vishalgupta.photoselector.presentation.designsystem.molecule.ConfirmDialog
+import com.vishalgupta.photoselector.presentation.designsystem.molecule.XmpSyncToggleRow
 import com.vishalgupta.photoselector.presentation.designsystem.theme.AppTheme
 import com.vishalgupta.photoselector.presentation.navigation.CategoryScope
 
@@ -86,6 +88,12 @@ fun LibraryRail(
     // Sweeps the whole Rejects bucket to the Trash (the rail confirms first). The caller performs
     // the move and empties the bucket; defaulted so the stateless rail renders without the wiring.
     onEmptyRejects: () -> Unit = {},
+    // Live XMP-sidecar sync footer state (whole-root, persisted per root). [xmpSyncSkippedNonRaw] is
+    // the count of non-RAW photos that won't get a sidecar, shown only while on. Defaulted so the
+    // stateless rail (and older callers/tests) render without the wiring.
+    xmpSyncEnabled: Boolean = false,
+    xmpSyncSkippedNonRaw: Int = 0,
+    onToggleXmpSync: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var showCreateDialog by remember { mutableStateOf(false) }
@@ -195,6 +203,17 @@ fun LibraryRail(
                     modifier = Modifier.size(AppTheme.dimens.iconSm),
                 )
             },
+        )
+
+        // Pinned footer, below every scope: the live RAW XMP-sidecar sync toggle. Fenced off by a
+        // divider so it reads as root-level chrome, not another category row.
+        HorizontalDivider(
+            Modifier.padding(horizontal = AppTheme.spacing.sm, vertical = AppTheme.spacing.xs),
+        )
+        XmpSyncToggleRow(
+            enabled = xmpSyncEnabled,
+            skippedNonRaw = xmpSyncSkippedNonRaw,
+            onToggle = onToggleXmpSync,
         )
     }
 

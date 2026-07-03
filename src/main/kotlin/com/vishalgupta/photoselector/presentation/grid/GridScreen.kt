@@ -1,6 +1,7 @@
 package com.vishalgupta.photoselector.presentation.grid
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.background
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
@@ -569,10 +570,6 @@ fun GridScreen(
             )
         }
 
-        if (state.isBusy) {
-            BusyBar(label = state.progressLabel ?: "Working…")
-        }
-
         // Non-blocking determinate progress while a grouping lens computes. Unlike the busy bar above
         // it doesn't lock the toolbar — the user can keep scrolling the singles grid while the model
         // works. Two independent sources: the inline Time regroup (sub-second, the bare bar) reads
@@ -717,6 +714,16 @@ fun GridScreen(
                     ),
                 )
             }
+
+            // The blocking busy strip (export / copy in flight) is overlaid at the top of the grid,
+            // not stacked in the Column above it: as a Column child a bare `if (isBusy)` inserted a
+            // row that shoved the weight-1f grid down and snapped it back on every export (a visible
+            // flicker). Fading it in over the grid keeps the grid still.
+            GridBusyOverlay(
+                visible = state.isBusy,
+                label = state.progressLabel ?: "Working…",
+                modifier = Modifier.align(Alignment.TopCenter),
+            )
 
             // Result/notice for bulk and library-level actions (export, copy, bulk file, the survey
             // cap notice) — rendered in the app's pill chrome, not a stock Material snackbar, so all
@@ -1000,6 +1007,19 @@ private fun GridMessagePill(message: String?, modifier: Modifier = Modifier) {
 @Composable
 private fun GridTogglePill(toast: CategoryToggle?, modifier: Modifier = Modifier) {
     LatchedPill(toast, modifier) { dt -> CategoryTogglePill(dt) }
+}
+
+/**
+ * The blocking busy strip, faded in over the top of the grid. Lives in its own composable so the
+ * top-level [AnimatedVisibility] resolves cleanly (inside the grid Box the enclosing ColumnScope
+ * would otherwise capture it); the caller passes the `align`ed [modifier] from the Box. A solid
+ * surface fill lets the bar read over the thumbnails beneath it.
+ */
+@Composable
+private fun GridBusyOverlay(visible: Boolean, label: String, modifier: Modifier = Modifier) {
+    AnimatedVisibility(visible = visible, enter = fadeIn(), exit = fadeOut(), modifier = modifier) {
+        BusyBar(label = label, modifier = Modifier.background(AppTheme.colorScheme.surface))
+    }
 }
 
 /**

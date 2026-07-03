@@ -917,4 +917,5 @@ class GridViewModel(
         if (report.failed.isNotEmpty()) parts += "${report.failed.size} failed"
         return parts.joinToString(", ")
     }
+
 }

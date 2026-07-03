@@ -88,7 +88,8 @@ Clean architecture, single Gradle module, package
   (`railCollapsed`/`onToggleRail`), hoisted to `App` so it survives scope switches
   and a Grid → Browser → Grid round trip. Two traps: rail rows must stay
   **non-keyboard-focusable** or they steal the grid's focus ring; and the rail
-  sets no `returnScrollIndex` (back-out lands on the warm All Photos grid).
+  sets no `returnScrollIndex` (back-out lands on the warm All Photos grid). The
+  rail's **footer** hosts the root-scoped XMP sidecar sync toggle.
 - **The grid is grouping/presentation only — mind the three index spaces.** The
   toolbar's segmented control picks a lens (`GridUiState.groupingMode`: `Off |
   Time | Similarity`, Time default); a non-`Off` mode regroups off-thread behind
@@ -359,6 +360,12 @@ recovering a half-finished run — are in `.agents/knowledge/release.md`.
   signing/notarization has to cover it, and `OnnxEmbeddingModel` construction
   must stay fail-soft (it falls back to the classical embedder) in case the
   runtime can't initialise on a given host.
+
+- **XMP sidecar sync: enable is a FULL whole-root reconcile, not a write-only
+  pass.** `XmpSyncCoordinator` must walk *every* root photo on enable, not just
+  the current favourites/rejects — else a photo that *left* both buckets is never
+  visited and its stale sidecar rating (which the `rhenium:managedRating` stamp
+  would otherwise clear) silently survives.
 
 ## Files worth knowing
 

@@ -150,6 +150,41 @@ class LibraryRailScreenshotTest {
         rule.dumpScreenshot("library-rail-selection-reject")
     }
 
+    @Test fun `rail footer shows xmp sync on with a non-raw skip count`() {
+        // Eyeball build/screenshots/library-rail-xmp-sync-on.png: the pinned footer below "New
+        // category" reads "XMP sync · On" with the Switch on and a muted "2 non-RAW skipped" line.
+        renderShell(
+            GridUiState(
+                photos = photos,
+                groups = photos.map(PhotoGroup::Single),
+                groupingMode = GroupingMode.Off,
+                scope = CategoryScope.AllPhotos,
+                categories = categories,
+                memberships = memberships,
+            ),
+            xmpSyncEnabled = true,
+            xmpSyncSkippedNonRaw = 2,
+        )
+        rule.dumpScreenshot("library-rail-xmp-sync-on")
+    }
+
+    @Test fun `rail footer shows xmp sync off`() {
+        // Eyeball build/screenshots/library-rail-xmp-sync-off.png: the footer reads "XMP sync · Off"
+        // with the Switch off and no skip count.
+        renderShell(
+            GridUiState(
+                photos = photos,
+                groups = photos.map(PhotoGroup::Single),
+                groupingMode = GroupingMode.Off,
+                scope = CategoryScope.AllPhotos,
+                categories = categories,
+                memberships = memberships,
+            ),
+            xmpSyncEnabled = false,
+        )
+        rule.dumpScreenshot("library-rail-xmp-sync-off")
+    }
+
     @Test fun `rail collapsed leaves the grid full-bleed`() {
         renderShell(
             GridUiState(
@@ -184,7 +219,12 @@ class LibraryRailScreenshotTest {
         rule.dumpScreenshot("library-rail-scrolling-list")
     }
 
-    private fun renderShell(state: GridUiState, railCollapsed: Boolean = false) {
+    private fun renderShell(
+        state: GridUiState,
+        railCollapsed: Boolean = false,
+        xmpSyncEnabled: Boolean = false,
+        xmpSyncSkippedNonRaw: Int = 0,
+    ) {
         // Mirror the host: the rail sits beside the grid in a Row (and is simply absent when
         // collapsed). entries are derived from the same categories+memberships the grid carries, so a
         // rail count matches a tile badge — exactly the production invariant (now via a shared flow).
@@ -204,6 +244,9 @@ class LibraryRailScreenshotTest {
                                 onRenameCategory = { _, _ -> },
                                 onDeleteCategory = {},
                                 onEmptyRejects = {},
+                                xmpSyncEnabled = xmpSyncEnabled,
+                                xmpSyncSkippedNonRaw = xmpSyncSkippedNonRaw,
+                                onToggleXmpSync = {},
                                 onChangeFolder = {},
                             )
                         }
