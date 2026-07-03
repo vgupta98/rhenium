@@ -68,7 +68,9 @@ architecture, single Gradle module: `domain` (pure) → `data` (impls) →
   `CachingPhotoGrouper` (memoize the computed grouping so lens re-entry is instant).
 - `prefs/` — `JsonAppPreferences` (global one-off flags: the first-run Similarity
   coachmark "seen" bit, plus the update checker's opt-out / skipped-version / stable
-  rollout install-id; one small JSON via `AtomicJsonWriter`).
+  rollout install-id; one small JSON via `AtomicJsonWriter`). Per-root
+  `JsonXmpSyncPreferences` (the XMP-sync on/off bit, stored in the root's own
+  `.photo-selector-xmp-sync.json`) implements the `XmpSyncPreferences` seam.
 - `update/` — `UpdateManifestDto` (feed JSON shape) + `HttpUpdateRepository` (the app's
   only outbound call: a JDK-`HttpClient` GET of the hosted manifest; every failure → null).
 - `export/` — `CopyPhotoExporter`, `TxtPhotoExporter`, `XmpSidecarPhotoExporter`
@@ -116,7 +118,10 @@ architecture, single Gradle module: `domain` (pure) → `data` (impls) →
   `SystemActions`, `CategoryHotkeys`, `CategoryToggle`, `GroupingMode`,
   `GroupingCoordinator` (owns the one background Similarity pass, decoupled from
   any grid's displayed lens — survives lens switches and navigation; exposes a
-  `progress` flow for the off-grid hint), `HoverOverlay`, `PlatformLabels`.
+  `progress` flow for the off-grid hint), `XmpSyncCoordinator` (root-scoped,
+  retained per root; when enabled, runs a full whole-root reconcile then live
+  delta-writes RAW sidecars on membership changes — mirrors `GroupingCoordinator`'s
+  lifecycle; drives `ExportPhotosXmpUseCase`), `HoverOverlay`, `PlatformLabels`.
 
 ## presentation/designsystem/ — Atomic Design
 
@@ -162,6 +167,7 @@ architecture, single Gradle module: `domain` (pure) → `data` (impls) →
 | Theming / new shared component | `presentation/designsystem/` (theme → atom → molecule → organism) |
 | Auto-update (notify-only) check | `domain/update/`, `data/update/`, `presentation/update/UpdateViewModel.kt`, `App.kt` (banner overlay), `di/AppContainer.kt` (wiring + Homebrew mute), `build.gradle.kts` (`generateBuildConfig`), `.github/workflows/release.yml` (feed publish) |
 | Export / trash | `data/export/`, `data/trash/`, matching `domain/usecase/` |
+| XMP sidecar export / live sync | `data/export/XmpSidecarPhotoExporter.kt` + `XmpDocument.kt`, `domain/usecase/ExportPhotosXmpUseCase.kt`, `presentation/common/XmpSyncCoordinator.kt` (live sync), `data/prefs/JsonXmpSyncPreferences.kt`, `designsystem/molecule/XmpSyncToggleRow.kt` (rail-footer toggle), `di/AppContainer.kt` (retained per root) |
 
 ## Key build files
 

@@ -19,6 +19,7 @@ object PathFilters {
         if (isHiddenOrSystem(file)) return true
         if (file == root.favouritesFile) return true
         if (file == root.positionFile) return true
+        if (file == root.xmpSyncFile) return true
         return false
     }
 }

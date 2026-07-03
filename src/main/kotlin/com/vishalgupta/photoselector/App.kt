@@ -96,6 +96,7 @@ fun App(container: AppContainer) {
                     // It reads its own root-scoped view model, retained per root by the container.
                     val railVm = remember(s.root.path) { container.libraryRailViewModel(s.root) }
                     val railEntries by railVm.entries.collectAsState()
+                    val xmpSyncState by railVm.xmpSyncState.collectAsState()
                     // Surface the reject-sweep result as a transient pill: only SET the message here.
                     // The auto-dismiss is an App-scoped effect (above) so it survives this Grid branch
                     // leaving composition (a sweep then Grid -> Browser within the timer).
@@ -151,6 +152,9 @@ fun App(container: AppContainer) {
                                 onRenameCategory = railVm::rename,
                                 onDeleteCategory = railVm::delete,
                                 onEmptyRejects = railVm::emptyRejectsToTrash,
+                                xmpSyncEnabled = xmpSyncState.enabled,
+                                xmpSyncSkippedNonRaw = xmpSyncState.skippedNonRaw,
+                                onToggleXmpSync = { railVm.toggleXmpSync() },
                                 onChangeFolder = changeFolder,
                             )
                         }
