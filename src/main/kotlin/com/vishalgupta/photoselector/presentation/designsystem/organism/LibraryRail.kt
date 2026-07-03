@@ -18,8 +18,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.PhotoLibrary
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -41,18 +44,21 @@ import com.vishalgupta.photoselector.domain.model.Category
 import com.vishalgupta.photoselector.domain.model.CategoryId
 import com.vishalgupta.photoselector.presentation.common.categorySlotDigit
 import com.vishalgupta.photoselector.presentation.designsystem.atom.FavouriteStar
+import com.vishalgupta.photoselector.presentation.designsystem.atom.RejectFlag
 import com.vishalgupta.photoselector.presentation.designsystem.molecule.CategoryActionsMenu
 import com.vishalgupta.photoselector.presentation.designsystem.molecule.CategoryNameDialog
 import com.vishalgupta.photoselector.presentation.designsystem.molecule.ChangeFolderButton
+import com.vishalgupta.photoselector.presentation.designsystem.molecule.ConfirmDialog
+import com.vishalgupta.photoselector.presentation.designsystem.molecule.XmpSyncToggleRow
 import com.vishalgupta.photoselector.presentation.designsystem.theme.AppTheme
 import com.vishalgupta.photoselector.presentation.navigation.CategoryScope
 
 /**
  * The left navigation rail: the library's scopes laid out as a vertical list rather than crammed
  * into the top bar. It owns folder identity (the root name + "Change folder"), the All Photos and
- * Favourites scopes, every custom category with its membership count, and category management
- * (create / rename / delete). The active scope is highlighted; selecting a row navigates to that
- * scope's own grid.
+ * the built-in Favourites / Rejects scopes, every custom category with its membership count, and
+ * category management (create / rename / delete) plus the one-shot "Move rejects to Trash" sweep.
+ * The active scope is highlighted; selecting a row navigates to that scope's own grid.
  *
  * This consolidates affordances that used to be split across the top bar (Favourites button, the
  * "Categories" dropdown, the per-category "⋯" menu, "Change folder") into one stable, scannable
@@ -79,15 +85,30 @@ fun LibraryRail(
     onRenameCategory: (CategoryId, String) -> Unit,
     onDeleteCategory: (CategoryId) -> Unit,
     onChangeFolder: () -> Unit,
+    // Sweeps the whole Rejects bucket to the Trash (the rail confirms first). The caller performs
+    // the move and empties the bucket; defaulted so the stateless rail renders without the wiring.
+    onEmptyRejects: () -> Unit = {},
+    // Live XMP-sidecar sync footer state (whole-root, persisted per root). [xmpSyncSkippedNonRaw] is
+    // the count of non-RAW photos that won't get a sidecar, shown only while on. Defaulted so the
+    // stateless rail (and older callers/tests) render without the wiring.
+    xmpSyncEnabled: Boolean = false,
+    xmpSyncSkippedNonRaw: Int = 0,
+    onToggleXmpSync: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var showCreateDialog by remember { mutableStateOf(false) }
     // The custom category currently being renamed (the rail owns one shared dialog rather than one
     // per row), or null when no rename is in flight.
     var renaming by remember { mutableStateOf<Category?>(null) }
+    // Destructive speed bump in front of the Rejects -> Trash sweep.
+    var confirmingEmptyRejects by remember { mutableStateOf(false) }
 
-    val favourites = entries.firstOrNull { it.first.builtIn }
+    // Built-in scopes (Favourites, Rejects) render first, in canonical order, each with its own
+    // glyph; custom categories follow with their slot digit. Generalised over `builtIn` rather than
+    // special-casing Favourites, so a new built-in is one entry in Category.builtIns.
+    val builtInEntries = entries.filter { it.first.builtIn }
     val customEntries = entries.filter { !it.first.builtIn }
+    val rejectsCount = entries.firstOrNull { it.first.id == Category.REJECTS_ID }?.second ?: 0
 
     Column(
         modifier
@@ -113,18 +134,27 @@ fun LibraryRail(
             },
         )
 
-        if (favourites != null) {
+        builtInEntries.forEach { (category, count) ->
             RailRow(
-                label = favourites.first.name,
-                selected = scope.isCategory(favourites.first.id),
-                count = favourites.second,
-                onClick = { onSelectCategory(favourites.first.id) },
-                leading = {
-                    FavouriteStar(
-                        filled = true,
-                        tint = AppTheme.colors.favourite,
-                        modifier = Modifier.size(AppTheme.dimens.iconSm),
-                    )
+                label = category.name,
+                selected = scope.isCategory(category.id),
+                count = count,
+                onClick = { onSelectCategory(category.id) },
+                leading = { BuiltInLeadingIcon(category.id) },
+                // Rejects carries the one library-level action: empty the bucket to Trash. Shown
+                // only when there is something to sweep, so it's never a dead control.
+                actions = if (category.id == Category.REJECTS_ID && count > 0) {
+                    {
+                        IconButton(onClick = { confirmingEmptyRejects = true }) {
+                            Icon(
+                                Icons.Outlined.DeleteSweep,
+                                contentDescription = "Move rejects to Trash",
+                                modifier = Modifier.size(AppTheme.dimens.iconSm),
+                            )
+                        }
+                    }
+                } else {
+                    null
                 },
             )
         }
@@ -174,6 +204,17 @@ fun LibraryRail(
                 )
             },
         )
+
+        // Pinned footer, below every scope: the live RAW XMP-sidecar sync toggle. Fenced off by a
+        // divider so it reads as root-level chrome, not another category row.
+        HorizontalDivider(
+            Modifier.padding(horizontal = AppTheme.spacing.sm, vertical = AppTheme.spacing.xs),
+        )
+        XmpSyncToggleRow(
+            enabled = xmpSyncEnabled,
+            skippedNonRaw = xmpSyncSkippedNonRaw,
+            onToggle = onToggleXmpSync,
+        )
     }
 
     if (showCreateDialog) {
@@ -204,6 +245,31 @@ fun LibraryRail(
             },
             onDismiss = { renaming = null },
         )
+    }
+
+    if (confirmingEmptyRejects) {
+        ConfirmDialog(
+            title = if (rejectsCount == 1) "Move 1 reject to Trash?" else "Move $rejectsCount rejects to Trash?",
+            message = "Every photo flagged as a reject will be moved to the macOS Trash. You can " +
+                "restore " + (if (rejectsCount == 1) "it" else "them") + " from there.",
+            confirmLabel = "Move to Trash",
+            confirmDestructive = true,
+            onConfirm = {
+                confirmingEmptyRejects = false
+                onEmptyRejects()
+            },
+            onDismiss = { confirmingEmptyRejects = false },
+        )
+    }
+}
+
+/** The leading glyph for a built-in scope row: the favourite star or the reject flag. */
+@Composable
+private fun BuiltInLeadingIcon(id: CategoryId) {
+    val size = Modifier.size(AppTheme.dimens.iconSm)
+    when (id) {
+        Category.REJECTS_ID -> RejectFlag(filled = true, tint = AppTheme.colors.reject, modifier = size)
+        else -> FavouriteStar(filled = true, tint = AppTheme.colors.favourite, modifier = size)
     }
 }
 

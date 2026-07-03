@@ -41,7 +41,7 @@ class JsonCategoriesRepository(
 
     private var boundRoot: RootFolder? = null
     private var photosById: Map<PhotoId, Photo> = emptyMap()
-    private val categoriesFlow = MutableStateFlow(listOf(Category.favourites()))
+    private val categoriesFlow = MutableStateFlow(Category.builtIns)
     private val membershipsFlow = MutableStateFlow<Map<CategoryId, Set<PhotoId>>>(emptyMap())
     private val readOnly = MutableStateFlow(false)
 
@@ -72,7 +72,7 @@ class JsonCategoriesRepository(
     }
 
     override suspend fun rename(root: RootFolder, id: CategoryId, newName: String) {
-        require(id != Category.FAVOURITES_ID) { "The built-in Favourites category cannot be renamed." }
+        require(id !in Category.BUILT_IN_IDS) { "A built-in category cannot be renamed." }
         if (boundRoot?.path != root.path) bind(root)
         mutex.withLock {
             categoriesFlow.value = categoriesFlow.value.map {
@@ -83,7 +83,7 @@ class JsonCategoriesRepository(
     }
 
     override suspend fun delete(root: RootFolder, id: CategoryId) {
-        require(id != Category.FAVOURITES_ID) { "The built-in Favourites category cannot be deleted." }
+        require(id !in Category.BUILT_IN_IDS) { "A built-in category cannot be deleted." }
         if (boundRoot?.path != root.path) bind(root)
         mutex.withLock {
             categoriesFlow.value = categoriesFlow.value.filterNot { it.id == id }
@@ -137,7 +137,7 @@ class JsonCategoriesRepository(
         mutex.withLock {
             boundRoot = null
             photosById = emptyMap()
-            categoriesFlow.value = listOf(Category.favourites())
+            categoriesFlow.value = Category.builtIns
             membershipsFlow.value = emptyMap()
             readOnly.value = false
         }
@@ -187,7 +187,7 @@ class JsonCategoriesRepository(
     }
 
     /** Reads the categories file (v2), migrates a legacy favourites file, or starts fresh —
-     *  always returning a normalised list with the built-in Favourites first. Returns null
+     *  always returning a normalised list with the built-in categories first. Returns null
      *  when a file *exists* but fails to decode, so [bind] can refuse to bind rather than
      *  expose an empty model that a later write would persist over the unreadable file. */
     private fun loadFromDisk(root: RootFolder): List<CategoryDto>? {
@@ -201,21 +201,28 @@ class JsonCategoriesRepository(
         if (Files.exists(favouritesFile)) {
             val entries = runCatching { LegacyFavouritesFile.decode(json, Files.readString(favouritesFile)) }
                 .getOrElse { return null }
-            return normalise(listOf(favouritesCategory(entries)))
+            // Seed only the legacy Favourites entries; normalise adds the other built-ins (empty).
+            val favourites = CategoryDto(FAVOURITES_ID, Category.FAVOURITES_NAME, builtIn = true, photos = entries)
+            return normalise(listOf(favourites))
         }
         return normalise(emptyList())
     }
 
-    /** Guarantees a built-in Favourites category exists, is first, and is the only built-in. */
+    /**
+     * Guarantees every built-in category exists, is marked built-in, comes first in canonical
+     * order ([Category.builtIns]), and is the only built-in; custom categories keep their order
+     * after them. Each built-in's stored photos (matched by id) are preserved — a freshly-seeded
+     * or legacy file simply starts the missing ones (e.g. Rejects) empty.
+     */
     private fun normalise(categories: List<CategoryDto>): List<CategoryDto> {
-        val favEntries = categories.firstOrNull { it.id == FAVOURITES_ID }?.photos.orEmpty()
-        val favourites = favouritesCategory(favEntries)
-        val rest = categories.filter { it.id != FAVOURITES_ID }.map { it.copy(builtIn = false) }
-        return listOf(favourites) + rest
+        val builtIns = Category.builtIns.map { builtIn ->
+            val photos = categories.firstOrNull { it.id == builtIn.id.value }?.photos.orEmpty()
+            CategoryDto(builtIn.id.value, builtIn.name, builtIn = true, photos = photos)
+        }
+        val builtInIds = Category.BUILT_IN_IDS.mapTo(HashSet()) { it.value }
+        val rest = categories.filterNot { it.id in builtInIds }.map { it.copy(builtIn = false) }
+        return builtIns + rest
     }
-
-    private fun favouritesCategory(entries: List<PhotoEntryDto>): CategoryDto =
-        CategoryDto(FAVOURITES_ID, Category.FAVOURITES_NAME, builtIn = true, photos = entries)
 
     private suspend fun writeToDisk(root: RootFolder) {
         if (boundRoot?.path != root.path) return

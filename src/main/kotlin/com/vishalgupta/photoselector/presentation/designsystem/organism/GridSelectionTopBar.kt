@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.Flag
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -19,8 +20,10 @@ import com.vishalgupta.photoselector.presentation.designsystem.molecule.Selectio
  * The grid top bar while a multi-select is active: the same chrome height and shape as
  * [GridTopBar], swapped in so the selection's bulk actions replace per-photo controls rather
  * than crowding them. Leads with a live "[n] selected" count, then the bulk file/export actions
- * (Favourite is promoted to its own star button to match the rest of the app, custom categories
- * sit behind an "Add to category" menu), and trails with **Clear**. The output paths reuse the same
+ * (Favourite and Reject — the two sides of the cull — get their own buttons to match the rest of
+ * the app, custom categories sit behind an "Add to category" menu), and trails with **Clear**.
+ * **Reject** only flags for the later "Move rejects to Trash" sweep; **Delete** trashes now. The
+ * output paths reuse the same
  * [ExportMenu] the per-scope [GridTopBar] carries — saving a .txt list or copying to a folder — so a
  * selection exports identically to a whole category rather than through a separate copy-only button.
  *
@@ -34,6 +37,7 @@ fun GridSelectionTopBar(
     selectedCount: Int,
     customCategories: List<Category>,
     onFileIntoFavourites: () -> Unit,
+    onFileIntoRejects: () -> Unit,
     onFileIntoCustom: (slot: Int) -> Unit,
     onExportSelectionTxt: () -> Unit,
     onCopySelection: (ConflictPolicy) -> Unit,
@@ -51,6 +55,13 @@ fun GridSelectionTopBar(
             text = "Favourite",
             onClick = onFileIntoFavourites,
             leadingIcon = Icons.Filled.Star,
+        )
+        // The reject half of the cull: flags the selection for the later "Move rejects to Trash"
+        // sweep (distinct from Delete, which trashes now). Filing action, so it stays neutral.
+        AppOutlinedButton(
+            text = "Reject",
+            onClick = onFileIntoRejects,
+            leadingIcon = Icons.Outlined.Flag,
         )
         if (customCategories.isNotEmpty()) {
             SelectionFileMenu(customCategories = customCategories, onSelectSlot = onFileIntoCustom)

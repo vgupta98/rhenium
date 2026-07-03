@@ -26,9 +26,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import com.vishalgupta.photoselector.di.AppContainer
-import com.vishalgupta.photoselector.domain.model.Category
 import com.vishalgupta.photoselector.presentation.browser.BrowserScreen
 import com.vishalgupta.photoselector.presentation.designsystem.molecule.BackgroundGroupingChip
+import com.vishalgupta.photoselector.presentation.designsystem.molecule.PillToast
 import com.vishalgupta.photoselector.presentation.designsystem.molecule.UpdateAvailableBanner
 import com.vishalgupta.photoselector.presentation.designsystem.organism.LibraryRail
 import com.vishalgupta.photoselector.presentation.grid.GridScreen
@@ -39,6 +39,7 @@ import com.vishalgupta.photoselector.presentation.navigation.InspectOrigin
 import com.vishalgupta.photoselector.presentation.navigation.Screen
 import com.vishalgupta.photoselector.presentation.rootpicker.RootFolderPickerScreen
 import com.vishalgupta.photoselector.presentation.designsystem.theme.AppTheme
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
@@ -67,6 +68,19 @@ fun App(container: AppContainer) {
     // trip, in lock-step with the retained scroll above.
     var railCollapsed by remember { mutableStateOf(false) }
 
+    // One-shot result of a "Move rejects to Trash" sweep, surfaced as a transient pill in the
+    // bottom-end overlay (the sweep is initiated from the rail, which lives only on the Grid).
+    var railSweepMessage by remember { mutableStateOf<String?>(null) }
+    // Auto-dismiss lives here, at App scope, NOT inside the Grid-branch collector that sets the
+    // message: a sweep then Grid -> Browser within the window would otherwise cancel the collector
+    // mid-delay and strand the pill on every screen. Keyed on the message so each new one re-arms.
+    LaunchedEffect(railSweepMessage) {
+        if (railSweepMessage != null) {
+            delay(2500)
+            railSweepMessage = null
+        }
+    }
+
     AppTheme {
         Surface(Modifier.fillMaxSize()) {
           Box(Modifier.fillMaxSize()) {
@@ -82,6 +96,13 @@ fun App(container: AppContainer) {
                     // It reads its own root-scoped view model, retained per root by the container.
                     val railVm = remember(s.root.path) { container.libraryRailViewModel(s.root) }
                     val railEntries by railVm.entries.collectAsState()
+                    val xmpSyncState by railVm.xmpSyncState.collectAsState()
+                    // Surface the reject-sweep result as a transient pill: only SET the message here.
+                    // The auto-dismiss is an App-scoped effect (above) so it survives this Grid branch
+                    // leaving composition (a sweep then Grid -> Browser within the timer).
+                    LaunchedEffect(railVm) {
+                        railVm.sweepEvents.collect { railSweepMessage = it }
+                    }
                     // Shared by the rail and the grid's empty-state CTA: drop the root and return to the picker.
                     val changeFolder: () -> Unit = {
                         coroutineScope.launch {
@@ -130,6 +151,10 @@ fun App(container: AppContainer) {
                                 onCreateCategory = railVm::create,
                                 onRenameCategory = railVm::rename,
                                 onDeleteCategory = railVm::delete,
+                                onEmptyRejects = railVm::emptyRejectsToTrash,
+                                xmpSyncEnabled = xmpSyncState.enabled,
+                                xmpSyncSkippedNonRaw = xmpSyncState.skippedNonRaw,
+                                onToggleXmpSync = { railVm.toggleXmpSync() },
                                 onChangeFolder = changeFolder,
                             )
                         }
@@ -231,22 +256,6 @@ fun App(container: AppContainer) {
                     BrowserScreen(
                         viewModel = vm,
                         systemActions = container.systemActions,
-                        onOpenFavourites = {
-                            container.goTo(
-                                Screen.Grid(
-                                    s.root,
-                                    CategoryScope.Category(Category.FAVOURITES_ID),
-                                    lastViewedPhotoId = vm.state.value.currentPhoto?.id,
-                                ),
-                            )
-                        },
-                        onChangeFolder = {
-                            coroutineScope.launch {
-                                container.resetForNewRoot()
-                                gridScrollStates.clear()
-                                container.goTo(Screen.RootPicker)
-                            }
-                        },
                         onBack = {
                             val idx = vm.state.value.currentIndex
                             val photoId = vm.state.value.currentPhoto?.id
@@ -345,6 +354,7 @@ fun App(container: AppContainer) {
                 horizontalAlignment = Alignment.End,
                 verticalArrangement = Arrangement.spacedBy(AppTheme.spacing.sm),
             ) {
+                railSweepMessage?.let { PillToast(text = it) }
                 groupingActivity?.takeIf { screen !is Screen.Grid }?.let { activity ->
                     BackgroundGroupingChip(processed = activity.processed, total = activity.total)
                 }

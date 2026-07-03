@@ -27,6 +27,13 @@ private val OnAccent = Color(0xFF1A1A1A)
 data class AppColors(
     /** Warm accent for the favourite star and the favourited toast (== the primary action colour). */
     val favourite: Color,
+    /**
+     * Muted red for the reject flag (the cull's "reject" half) — the one cool, negative accent,
+     * deliberately distinct from the warm [favourite] so keep and reject read apart at a glance.
+     */
+    val reject: Color,
+    /** Translucent dark scrim dimming a rejected tile so culls visibly recede in the contact sheet. */
+    val rejectScrim: Color,
     /** Neutral light fill marking a custom-category membership (hueless; distinct from the amber favourite). */
     val categoryMemberContainer: Color,
     /** Foreground on [categoryMemberContainer]. */
@@ -89,6 +96,8 @@ data class AppColors(
 /** The single dark palette. Values preserved verbatim from the pre-token UI. */
 val DarkAppColors = AppColors(
     favourite = Accent,
+    reject = Color(0xFFE0594B),
+    rejectScrim = Color.Black.copy(alpha = 0.5f),
     categoryMemberContainer = Color(0xFFE6E6E6),
     categoryMemberContent = Color(0xFF1A1A1A),
     focusRing = Color(0xFFF5F5F5),

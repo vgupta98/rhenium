@@ -51,6 +51,7 @@ import com.vishalgupta.photoselector.data.image.ImageLoader
 import com.vishalgupta.photoselector.domain.model.Photo
 import com.vishalgupta.photoselector.presentation.designsystem.atom.FavouriteStar
 import com.vishalgupta.photoselector.presentation.designsystem.atom.LoadingIndicator
+import com.vishalgupta.photoselector.presentation.designsystem.atom.RejectFlag
 import com.vishalgupta.photoselector.presentation.designsystem.theme.AppTheme
 import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.persistentListOf
@@ -62,6 +63,9 @@ private const val THUMBNAIL_VIEWPORT_PX = 320
  * Favourites membership (in any scope, including a custom-category grid), a focus
  * border, and a "last viewed" underline. Decodes lazily through [loader], keyed on the
  * photo id.
+ *
+ * [isRejected] marks the cull's reject half: the tile dims under a scrim and shows a reject flag
+ * (top-end, taking the favourite star's corner — a tile reads as kept XOR rejected).
  *
  * [categoryBadges] are the digit slots (1..9) of the custom categories this photo belongs
  * to — shown as small numbered chips so filing a photo with a number key leaves a visible,
@@ -96,6 +100,7 @@ fun PhotoThumbnail(
     isFocused: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    isRejected: Boolean = false,
     isLastViewed: Boolean = false,
     isSelected: Boolean = false,
     onToggleSelect: (() -> Unit)? = null,
@@ -168,7 +173,21 @@ fun PhotoThumbnail(
         } else {
             LoadingIndicator()
         }
-        if (isMarked) {
+        // A rejected tile is dimmed (it visibly recedes in the contact sheet) and flagged top-end.
+        // Reject is the cull's negative half, so it takes the star's corner and suppresses it — a
+        // photo realistically reads as kept XOR rejected, never both at once.
+        if (isRejected) {
+            Box(Modifier.fillMaxSize().background(AppTheme.colors.rejectScrim))
+            RejectFlag(
+                filled = true,
+                tint = AppTheme.colors.reject,
+                contentDescription = "Rejected",
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(AppTheme.spacing.xs)
+                    .size(AppTheme.dimens.iconSm),
+            )
+        } else if (isMarked) {
             FavouriteStar(
                 filled = true,
                 tint = AppTheme.colors.favourite,

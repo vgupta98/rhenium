@@ -40,9 +40,6 @@ fun InspectScreen(
         InspectMode.Browse -> BrowserScreen(
             viewModel = viewModel.browseViewModel(),
             systemActions = systemActions,
-            // Library chrome is hidden in embedded mode, so these are never reached.
-            onOpenFavourites = {},
-            onChangeFolder = {},
             // Esc / back: to the overview when there is one, otherwise out of Inspect entirely.
             onBack = { if (viewModel.gridAvailable) viewModel.openGrid() else onExit() },
             onCompare = {},

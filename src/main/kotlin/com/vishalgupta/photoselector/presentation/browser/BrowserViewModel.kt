@@ -37,7 +37,6 @@ data class BrowserUiState(
     val currentBitmap: ImageBitmap?,
     val isLoadingBitmap: Boolean,
     val isCurrentFavourite: Boolean,
-    val favouriteCount: Int,
     val readOnly: Boolean,
     /** All categories for this root, Favourites first — the HUD legend. */
     val categories: List<Category> = emptyList(),
@@ -52,7 +51,6 @@ data class BrowserUiState(
             currentBitmap = null,
             isLoadingBitmap = photos.isNotEmpty(),
             isCurrentFavourite = false,
-            favouriteCount = 0,
             readOnly = false,
         )
     }
@@ -95,7 +93,6 @@ class BrowserViewModel(
                 currentIndex = safeIndex,
                 currentPhoto = firstPhoto,
                 isCurrentFavourite = firstPhoto != null && firstPhoto.id in favs,
-                favouriteCount = favs.size,
                 categories = categoriesFlow.value,
                 currentMemberships = membershipsOf(firstPhoto),
             )
@@ -126,7 +123,6 @@ class BrowserViewModel(
                     val photo = it.currentPhoto
                     it.copy(
                         isCurrentFavourite = photo != null && photo.id in favs,
-                        favouriteCount = favs.size,
                         readOnly = readOnly,
                         categories = cats,
                         currentMemberships = if (photo == null) emptySet()

@@ -58,12 +58,13 @@ class JsonCategoriesRepositoryTest {
         repo.observeMemberships(root).value[Category.FAVOURITES_ID].orEmpty()
 
     @Test
-    fun freshRoot_exposesOnlyBuiltInFavourites() {
+    fun freshRoot_exposesBuiltInFavouritesAndRejects() {
         val (repo, root) = repo(listOf(photo("a.jpg", 1, 1)))
 
         val categories = repo.observeCategories(root).value
-        assertEquals(listOf(Category.FAVOURITES_ID), categories.map { it.id })
-        assertTrue(categories.single().builtIn)
+        // Both built-ins exist, in canonical order, and both are flagged built-in.
+        assertEquals(listOf(Category.FAVOURITES_ID, Category.REJECTS_ID), categories.map { it.id })
+        assertTrue(categories.all { it.builtIn })
         assertEquals(emptySet<PhotoId>(), favouriteIds(repo, root))
     }
 
@@ -88,7 +89,7 @@ class JsonCategoriesRepositoryTest {
         // A fresh repository reading the same file sees the persisted category + membership.
         val (reopened, _) = repo(listOf(photo("a.jpg", 100, 5), photo("b.jpg", 200, 6)))
         val categories = reopened.observeCategories(root).value
-        assertEquals(listOf("Favourites", "Selects"), categories.map { it.name })
+        assertEquals(listOf("Favourites", "Rejects", "Selects"), categories.map { it.name })
         assertEquals(
             setOf(PhotoId("b.jpg")),
             reopened.observeMemberships(root).value[selects],
@@ -146,11 +147,43 @@ class JsonCategoriesRepositoryTest {
     }
 
     @Test
-    fun builtInFavourites_cannotBeRenamedOrDeleted() = runTest {
+    fun builtIns_cannotBeRenamedOrDeleted() = runTest {
         val (repo, root) = repo(listOf(photo("a.jpg", 1, 1)))
 
         assertFailsWith<IllegalArgumentException> { repo.rename(root, Category.FAVOURITES_ID, "Nope") }
         assertFailsWith<IllegalArgumentException> { repo.delete(root, Category.FAVOURITES_ID) }
+        assertFailsWith<IllegalArgumentException> { repo.rename(root, Category.REJECTS_ID, "Nope") }
+        assertFailsWith<IllegalArgumentException> { repo.delete(root, Category.REJECTS_ID) }
+    }
+
+    @Test
+    fun rejectsMembership_togglesAndPersists() = runTest {
+        val (repo, root) = repo(listOf(photo("a.jpg", 100, 5)))
+
+        repo.toggleMembership(root, Category.REJECTS_ID, PhotoId("a.jpg"))
+        assertEquals(
+            setOf(PhotoId("a.jpg")),
+            repo.observeMemberships(root).value[Category.REJECTS_ID],
+        )
+
+        // A fresh repository reading the same file sees the persisted reject.
+        val (reopened, _) = repo(listOf(photo("a.jpg", 100, 5)))
+        assertEquals(
+            setOf(PhotoId("a.jpg")),
+            reopened.observeMemberships(root).value[Category.REJECTS_ID],
+        )
+    }
+
+    @Test
+    fun legacyFavouritesMigration_alsoSeedsEmptyRejects() = runTest {
+        // Migrating the v1 favourites file must add the new Rejects built-in (empty) alongside it.
+        val (repo, root) = repo(listOf(photo("a.jpg", 100, 5)))
+        writeFavouritesFile(root, """{"favourites":["a.jpg"]}""")
+
+        val categories = repo.observeCategories(root).value
+        assertEquals(listOf(Category.FAVOURITES_ID, Category.REJECTS_ID), categories.map { it.id })
+        assertEquals(setOf(PhotoId("a.jpg")), favouriteIds(repo, root))
+        assertEquals(emptySet<PhotoId>(), repo.observeMemberships(root).value[Category.REJECTS_ID].orEmpty())
     }
 
     @Test
@@ -162,7 +195,10 @@ class JsonCategoriesRepositoryTest {
         assertEquals("Maybe Later", repo.observeCategories(root).value.first { it.id == id }.name)
 
         repo.delete(root, id)
-        assertEquals(listOf(Category.FAVOURITES_ID), repo.observeCategories(root).value.map { it.id })
+        assertEquals(
+            listOf(Category.FAVOURITES_ID, Category.REJECTS_ID),
+            repo.observeCategories(root).value.map { it.id },
+        )
     }
 
     @Test

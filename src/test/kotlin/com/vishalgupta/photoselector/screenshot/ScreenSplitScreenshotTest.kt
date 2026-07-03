@@ -35,7 +35,6 @@ import com.vishalgupta.photoselector.domain.model.Photo
 import com.vishalgupta.photoselector.domain.model.PhotoId
 import com.vishalgupta.photoselector.presentation.browser.BrowserScreen
 import com.vishalgupta.photoselector.presentation.browser.BrowserUiState
-import com.vishalgupta.photoselector.presentation.browser.CategoryToastState
 import com.vishalgupta.photoselector.presentation.common.CategoryToggle
 import com.vishalgupta.photoselector.presentation.designsystem.molecule.BrowserKeyboardLegend
 import com.vishalgupta.photoselector.presentation.designsystem.organism.BrowserCategoryHud
@@ -108,6 +107,7 @@ class ScreenSplitScreenshotTest {
         state: GridUiState,
         onBack: (() -> Unit)?,
         categoryToast: CategoryToggle? = null,
+        resultToast: String? = null,
         modifier: Modifier = Modifier,
     ) {
         GridScreen(
@@ -121,9 +121,9 @@ class ScreenSplitScreenshotTest {
             onToggleCustomCategoryAtFocus = {},
             onExportTxt = {},
             onCopyToFolder = {},
-            onDismissToast = {},
             imageLoader = noOpImageLoader,
             categoryToast = categoryToast,
+            resultToast = resultToast,
             modifier = modifier,
         )
     }
@@ -381,8 +381,8 @@ class ScreenSplitScreenshotTest {
                             photos = manyPhotos,
                             scope = CategoryScope.AllPhotos,
                             categories = categories,
-                            toast = "Select up to 12 photos to compare side by side",
                         ),
+                        resultToast = "Select up to 12 photos to compare side by side",
                         onBack = null,
                     )
                 }
@@ -569,7 +569,6 @@ class ScreenSplitScreenshotTest {
                             currentBitmap = null,
                             isLoadingBitmap = true,
                             isCurrentFavourite = false,
-                            favouriteCount = 0,
                             readOnly = false,
                         ),
                         toast = null,
@@ -577,8 +576,6 @@ class ScreenSplitScreenshotTest {
                         onNext = {},
                         onToggleCategory = {},
                         onViewportSizeChanged = {},
-                        onOpenFavourites = {},
-                        onChangeFolder = {},
                         onBackToGrid = {},
                     )
                 }
@@ -600,8 +597,6 @@ class ScreenSplitScreenshotTest {
                         onNext = {},
                         onToggleCategory = {},
                         onViewportSizeChanged = {},
-                        onOpenFavourites = {},
-                        onChangeFolder = {},
                         onBackToGrid = {},
                     )
                 }
@@ -624,16 +619,13 @@ class ScreenSplitScreenshotTest {
                             currentBitmap = ImageBitmap(200, 150),
                             isLoadingBitmap = false,
                             isCurrentFavourite = true,
-                            favouriteCount = 1,
                             readOnly = false,
                         ),
-                        toast = CategoryToastState("Favourites", isFavourite = true, added = true),
+                        toast = CategoryToggle("Favourites", isFavourite = true, added = true),
                         onPrevious = {},
                         onNext = {},
                         onToggleCategory = {},
                         onViewportSizeChanged = {},
-                        onOpenFavourites = {},
-                        onChangeFolder = {},
                         onBackToGrid = {},
                     )
                 }
@@ -656,17 +648,14 @@ class ScreenSplitScreenshotTest {
                             currentBitmap = ImageBitmap(200, 150),
                             isLoadingBitmap = false,
                             isCurrentFavourite = false,
-                            favouriteCount = 0,
                             readOnly = false,
                             categories = categories,
                         ),
-                        toast = CategoryToastState("Selects", isFavourite = false, added = false),
+                        toast = CategoryToggle("Selects", isFavourite = false, added = false),
                         onPrevious = {},
                         onNext = {},
                         onToggleCategory = {},
                         onViewportSizeChanged = {},
-                        onOpenFavourites = {},
-                        onChangeFolder = {},
                         onBackToGrid = {},
                     )
                 }
@@ -691,7 +680,6 @@ class ScreenSplitScreenshotTest {
                             currentBitmap = ImageBitmap(200, 150),
                             isLoadingBitmap = false,
                             isCurrentFavourite = true,
-                            favouriteCount = 1,
                             readOnly = false,
                         ),
                         toast = null,
@@ -699,8 +687,6 @@ class ScreenSplitScreenshotTest {
                         onNext = {},
                         onToggleCategory = {},
                         onViewportSizeChanged = {},
-                        onOpenFavourites = {},
-                        onChangeFolder = {},
                         onBackToGrid = {},
                         onShowInAllPhotos = {},
                     )
@@ -710,43 +696,6 @@ class ScreenSplitScreenshotTest {
         rule.waitForIdle()
         rule.onNodeWithText("Show in All Photos").assertIsDisplayed()
         rule.dumpScreenshot("browser-show-in-all-photos")
-    }
-
-    @Test
-    fun browser_changeFolderConfirm() {
-        // The browser's "Change folder" runs the same session-teardown as the grid's, so it
-        // gets the same confirm guard — captured here over the photo scrim.
-        rule.setContent {
-            AppTheme {
-                Surface(Modifier.size(800.dp, 600.dp)) {
-                    BrowserScreen(
-                        state = BrowserUiState(
-                            photos = testPhotos,
-                            currentIndex = 0,
-                            currentPhoto = testPhotos[0],
-                            currentBitmap = ImageBitmap(200, 150),
-                            isLoadingBitmap = false,
-                            isCurrentFavourite = true,
-                            favouriteCount = 1,
-                            readOnly = false,
-                        ),
-                        toast = null,
-                        onPrevious = {},
-                        onNext = {},
-                        onToggleCategory = {},
-                        onViewportSizeChanged = {},
-                        onOpenFavourites = {},
-                        onChangeFolder = {},
-                        onBackToGrid = {},
-                    )
-                }
-            }
-        }
-        rule.waitForIdle()
-        rule.onNodeWithText("Change folder").performClick()
-        rule.waitForIdle()
-        rule.onNodeWithText("Change folder?").assertIsDisplayed()
-        rule.dumpScreenshot("browser-change-folder-confirm", rule.onAllNodes(isRoot()).onLast())
     }
 
     @OptIn(ExperimentalTestApi::class)
@@ -765,7 +714,6 @@ class ScreenSplitScreenshotTest {
                             currentBitmap = ImageBitmap(200, 150),
                             isLoadingBitmap = false,
                             isCurrentFavourite = false,
-                            favouriteCount = 0,
                             readOnly = false,
                         ),
                         toast = null,
@@ -773,8 +721,6 @@ class ScreenSplitScreenshotTest {
                         onNext = {},
                         onToggleCategory = {},
                         onViewportSizeChanged = {},
-                        onOpenFavourites = {},
-                        onChangeFolder = {},
                         onBackToGrid = {},
                     )
                 }
@@ -920,7 +866,6 @@ class ScreenSplitScreenshotTest {
                             currentBitmap = ImageBitmap(200, 150),
                             isLoadingBitmap = false,
                             isCurrentFavourite = false,
-                            favouriteCount = 0,
                             readOnly = false,
                             categories = categories,
                         ),
@@ -929,8 +874,6 @@ class ScreenSplitScreenshotTest {
                         onNext = {},
                         onToggleCategory = {},
                         onViewportSizeChanged = {},
-                        onOpenFavourites = {},
-                        onChangeFolder = {},
                         onBackToGrid = {},
                         embedded = true,
                         onSwitchToGrid = {},
@@ -958,7 +901,6 @@ class ScreenSplitScreenshotTest {
                             currentBitmap = ImageBitmap(200, 150),
                             isLoadingBitmap = false,
                             isCurrentFavourite = false,
-                            favouriteCount = 0,
                             readOnly = false,
                             categories = categories,
                         ),
@@ -967,8 +909,6 @@ class ScreenSplitScreenshotTest {
                         onNext = {},
                         onToggleCategory = {},
                         onViewportSizeChanged = {},
-                        onOpenFavourites = {},
-                        onChangeFolder = {},
                         onBackToGrid = {},
                         embedded = true,
                         onSwitchToGrid = null,

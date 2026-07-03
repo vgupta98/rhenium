@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowForward
@@ -44,13 +43,14 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.onSizeChanged
 import com.vishalgupta.photoselector.domain.model.Category
 import com.vishalgupta.photoselector.domain.model.CategoryId
+import com.vishalgupta.photoselector.presentation.common.CategoryToggle
 import com.vishalgupta.photoselector.presentation.common.HoverOverlay
 import com.vishalgupta.photoselector.presentation.common.SystemActions
 import com.vishalgupta.photoselector.presentation.common.customCategories
 import com.vishalgupta.photoselector.presentation.common.digitSlot
-import com.vishalgupta.photoselector.presentation.designsystem.atom.FavouriteStar
 import com.vishalgupta.photoselector.presentation.designsystem.atom.LoadingIndicator
 import com.vishalgupta.photoselector.presentation.designsystem.molecule.BrowserKeyboardLegend
+import com.vishalgupta.photoselector.presentation.designsystem.molecule.CategoryTogglePill
 import com.vishalgupta.photoselector.presentation.designsystem.molecule.ConfirmDialog
 import com.vishalgupta.photoselector.presentation.designsystem.molecule.ErrorPlaceholder
 import com.vishalgupta.photoselector.presentation.designsystem.molecule.PillToast
@@ -61,15 +61,10 @@ import com.vishalgupta.photoselector.presentation.designsystem.theme.AppTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 
-/** State for the transient confirmation pill shown after a membership toggle. */
-data class CategoryToastState(val categoryName: String, val isFavourite: Boolean, val added: Boolean)
-
 @Composable
 fun BrowserScreen(
     viewModel: BrowserViewModel,
     systemActions: SystemActions,
-    onOpenFavourites: () -> Unit,
-    onChangeFolder: () -> Unit,
     onBack: () -> Unit,
     onCompare: () -> Unit,
     // Non-null only when browsing a category: jumps to this photo in the All Photos grid. Null hides
@@ -84,7 +79,7 @@ fun BrowserScreen(
 ) {
     DisposableEffect(viewModel, manageLifecycle) { onDispose { if (manageLifecycle) viewModel.onClear() } }
     val state by viewModel.state.collectAsState()
-    var toast by remember { mutableStateOf<CategoryToastState?>(null) }
+    var toast by remember { mutableStateOf<CategoryToggle?>(null) }
     var deleteMessage by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
@@ -93,7 +88,7 @@ fun BrowserScreen(
 
     LaunchedEffect(viewModel) {
         viewModel.toggleEvents.collectLatest { event ->
-            toast = CategoryToastState(event.categoryName, event.isFavourite, event.added)
+            toast = event
             delay(1200)
             toast = null
         }
@@ -121,8 +116,6 @@ fun BrowserScreen(
         onToggleCategory = viewModel::toggleCategory,
         onDeleteCurrent = viewModel::deleteCurrent,
         onViewportSizeChanged = viewModel::setViewportLongEdgePx,
-        onOpenFavourites = onOpenFavourites,
-        onChangeFolder = onChangeFolder,
         onBackToGrid = onBack,
         onCompare = onCompare,
         onShowInAllPhotos = onShowInAllPhotos,
@@ -135,14 +128,12 @@ fun BrowserScreen(
 @Composable
 fun BrowserScreen(
     state: BrowserUiState,
-    toast: CategoryToastState?,
+    toast: CategoryToggle?,
     systemActions: SystemActions? = null,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
     onToggleCategory: (CategoryId) -> Unit,
     onViewportSizeChanged: (Int) -> Unit,
-    onOpenFavourites: () -> Unit,
-    onChangeFolder: () -> Unit,
     onBackToGrid: () -> Unit,
     onCompare: () -> Unit = {},
     onShowInAllPhotos: (() -> Unit)? = null,
@@ -185,7 +176,7 @@ fun BrowserScreen(
     }
 
     // Hold last non-null toast so AnimatedVisibility content renders during exit fade.
-    var displayedToast by remember { mutableStateOf<CategoryToastState?>(null) }
+    var displayedToast by remember { mutableStateOf<CategoryToggle?>(null) }
     if (toast != null) displayedToast = toast
 
     // Same latch for the delete confirmation/failure message.
@@ -220,6 +211,8 @@ fun BrowserScreen(
                     Key.DirectionLeft -> { onPrevious(); true }
                     Key.DirectionRight -> { onNext(); true }
                     Key.F -> if (meta) false else { onToggleCategory(Category.FAVOURITES_ID); true }
+                    // X flags the current photo as a reject — the cull's reject half, mirroring F.
+                    Key.X -> if (meta) false else { onToggleCategory(Category.REJECTS_ID); true }
                     Key.R -> if (meta) false else {
                         state.currentPhoto?.absolutePath?.let { systemActions?.revealInFileManager(it) }
                         true
@@ -249,12 +242,9 @@ fun BrowserScreen(
             countLabel = if (state.photos.isEmpty()) "0 / 0"
             else "${state.currentIndex + 1} / ${state.photos.size}",
             relativePath = state.currentPhoto?.relativePath.orEmpty(),
-            favouriteCount = state.favouriteCount,
             readOnly = state.readOnly,
             onBack = onBackToGrid,
-            onOpenFavourites = onOpenFavourites,
             onShowInAllPhotos = onShowInAllPhotos,
-            onChangeFolder = onChangeFolder,
             embedded = embedded,
             onSwitchToGrid = onSwitchToGrid,
             modifier = Modifier.fillMaxWidth(),
@@ -351,29 +341,7 @@ fun BrowserScreen(
                 .align(Alignment.BottomCenter)
                 .padding(bottom = AppTheme.dimens.browserToastBottomInset),
         ) {
-            val dt = displayedToast
-            if (dt != null) {
-                PillToast(
-                    text = when {
-                        dt.isFavourite && dt.added -> "Favourited"
-                        dt.isFavourite -> "Unfavourited"
-                        dt.added -> "Added to ${dt.categoryName}"
-                        else -> "Removed from ${dt.categoryName}"
-                    },
-                    leadingIcon = if (dt.isFavourite) {
-                        { FavouriteStar(filled = dt.added, modifier = Modifier.size(AppTheme.dimens.iconSm)) }
-                    } else {
-                        null
-                    },
-                    // Colour encodes the action (added vs removed), not which category — a fast
-                    // peripheral cue when flipping through a cull. Favourites keeps its star too.
-                    colors = if (dt.added) {
-                        PillToastDefaults.addedColors()
-                    } else {
-                        PillToastDefaults.removedColors()
-                    },
-                )
-            }
+            displayedToast?.let { dt -> CategoryTogglePill(dt) }
         }
 
         AnimatedVisibility(

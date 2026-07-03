@@ -27,6 +27,7 @@ import com.vishalgupta.photoselector.presentation.designsystem.molecule.Conflict
 import com.vishalgupta.photoselector.presentation.designsystem.molecule.ErrorPlaceholder
 import com.vishalgupta.photoselector.presentation.designsystem.molecule.FavouritesButton
 import com.vishalgupta.photoselector.presentation.designsystem.molecule.GroupingModeToggle
+import com.vishalgupta.photoselector.presentation.designsystem.molecule.LatchedPill
 import com.vishalgupta.photoselector.presentation.designsystem.molecule.PillToast
 import com.vishalgupta.photoselector.presentation.designsystem.molecule.PillToastDefaults
 import com.vishalgupta.photoselector.presentation.designsystem.theme.AppTheme
@@ -81,6 +82,9 @@ class DesignSystemGalleryScreenshotTest {
                                 text = "Unfavourited",
                                 leadingIcon = { FavouriteStar(filled = false, modifier = Modifier.size(AppTheme.dimens.iconSm)) },
                             )
+                            // The shared latch-and-fade wrapper the grid/browser pills are built from;
+                            // with a present value it renders its body (here a PillToast) unchanged.
+                            LatchedPill(value = "Added to Ceremony") { PillToast(text = it) }
                         }
 
                         Text("Background grouping", style = MaterialTheme.typography.titleMedium)

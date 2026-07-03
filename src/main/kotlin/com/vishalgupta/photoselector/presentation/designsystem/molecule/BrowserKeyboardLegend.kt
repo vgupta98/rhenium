@@ -62,6 +62,7 @@ private fun browserHints(
     add(KeyHint("← →", "Move"))
     if (!readOnly) {
         add(KeyHint("F", "Favourite"))
+        add(KeyHint("X", "Reject"))
         if (hasCustomCategories) add(KeyHint("1–9", "Categories"))
     }
     if (canCompare) add(KeyHint("C", "Compare"))
