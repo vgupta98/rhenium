@@ -10,6 +10,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.focusProperties
 import com.vishalgupta.photoselector.presentation.designsystem.theme.AppTheme
 
@@ -53,8 +54,11 @@ fun XmpSyncToggleRow(
         Switch(
             checked = enabled,
             onCheckedChange = onToggle,
-            // Kept off the keyboard ring so it never steals arrow-key focus from the grid.
-            modifier = Modifier.focusProperties { canFocus = false },
+            // Material3's Switch has no size params and renders large for a rail footer, so scale it
+            // down; kept off the keyboard ring so it never steals arrow-key focus from the grid.
+            modifier = Modifier
+                .scale(0.8f)
+                .focusProperties { canFocus = false },
         )
     }
 }
