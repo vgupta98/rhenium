@@ -220,7 +220,6 @@ class LibraryRailScreenshotTest {
                             onToggleCustomCategoryAtFocus = {},
                             onExportTxt = {},
                             onCopyToFolder = {},
-                            onDismissToast = {},
                             imageLoader = colorLoader,
                             modifier = Modifier.weight(1f).fillMaxHeight(),
                         )

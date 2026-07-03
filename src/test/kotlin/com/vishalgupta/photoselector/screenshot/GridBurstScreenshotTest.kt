@@ -302,7 +302,6 @@ class GridBurstScreenshotTest {
                         onToggleCustomCategoryAtFocus = {},
                         onExportTxt = {},
                         onCopyToFolder = {},
-                        onDismissToast = {},
                         imageLoader = colorLoader,
                         groupingNotice = groupingNotice,
                     )
