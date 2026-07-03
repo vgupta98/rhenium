@@ -169,12 +169,12 @@ object XmpDocument {
     private fun findFields(descs: List<Element>, namespace: String, local: String): List<FieldRef> {
         val out = ArrayList<FieldRef>()
         for (desc in descs) {
-            desc.getAttributeNodeNS(namespace, local)?.let { out += FieldRef(desc, it, null) }
+            desc.getAttributeNodeNS(namespace, local)?.let { out += FieldRef.Attribute(desc, it) }
             val kids = desc.childNodes
             for (i in 0 until kids.length) {
                 val n = kids.item(i)
                 if (n is Element && namespace == n.namespaceURI && local == n.localName) {
-                    out += FieldRef(desc, null, n)
+                    out += FieldRef.Child(desc, n)
                 }
             }
         }
@@ -186,16 +186,28 @@ object XmpDocument {
         if (el.lookupNamespaceURI(prefix) != ns) el.setAttributeNS(XMLNS_NS, "xmlns:$prefix", ns)
     }
 
-    /** A single owned-field occurrence — either an attribute node or a child element — with its block. */
-    private class FieldRef(val owner: Element, private val attr: Attr?, private val element: Element?) {
-        val value: String get() = attr?.value ?: element!!.textContent
+    /**
+     * A single owned-field occurrence with its block — either an attribute node or a child element.
+     * The two forms are distinct subtypes so the "exactly one carrier" invariant is guaranteed by the
+     * type rather than asserted at each use.
+     */
+    private sealed class FieldRef(val owner: Element) {
+        abstract val value: String
+        abstract fun setValue(v: String)
+        abstract fun remove()
 
-        fun setValue(v: String) {
-            if (attr != null) attr.value = v else element!!.textContent = v
+        /** The `xmp:Rating="..."` attribute form. */
+        class Attribute(owner: Element, private val attr: Attr) : FieldRef(owner) {
+            override val value: String get() = attr.value
+            override fun setValue(v: String) { attr.value = v }
+            override fun remove() { owner.removeAttributeNode(attr) }
         }
 
-        fun remove() {
-            if (attr != null) owner.removeAttributeNode(attr) else owner.removeChild(element!!)
+        /** The `<xmp:Rating>...</xmp:Rating>` child-element form. */
+        class Child(owner: Element, private val element: Element) : FieldRef(owner) {
+            override val value: String get() = element.textContent
+            override fun setValue(v: String) { element.textContent = v }
+            override fun remove() { owner.removeChild(element) }
         }
     }
 }
