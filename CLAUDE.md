@@ -89,8 +89,7 @@ Clean architecture, single Gradle module, package
   and a Grid → Browser → Grid round trip. Two traps: rail rows must stay
   **non-keyboard-focusable** or they steal the grid's focus ring; and the rail
   sets no `returnScrollIndex` (back-out lands on the warm All Photos grid). The
-  rail's **footer** hosts the root-scoped **XMP sidecar sync** toggle — a
-  persistent mode, deliberately off the crowded top bar (see Known gotchas).
+  rail's **footer** hosts the root-scoped XMP sidecar sync toggle.
 - **The grid is grouping/presentation only — mind the three index spaces.** The
   toolbar's segmented control picks a lens (`GridUiState.groupingMode`: `Off |
   Time | Similarity`, Time default); a non-`Off` mode regroups off-thread behind
@@ -362,20 +361,11 @@ recovering a half-finished run — are in `.agents/knowledge/release.md`.
   must stay fail-soft (it falls back to the classical embedder) in case the
   runtime can't initialise on a given host.
 
-- **XMP sidecar sync enable = a FULL whole-root reconcile, never a write-only
-  pass.** The rail-footer sync toggle (`XmpSyncCoordinator`, root-scoped and
-  retained per root, mirroring `GroupingCoordinator`) keeps RAW sidecars in step
-  with Favourites/Rejects. On enable it must walk **every** root photo
-  (`photosForRoot()`), not just the current favourites/rejects — because a photo
-  that *left* both buckets is only visited (and its stamped rating cleared) by a
-  full pass. Build enable as "write the current buckets" and the un-decide clear
-  silently never fires: an un-favourited photo keeps its stale 5-star sidecar.
-  Clears and overwrites are guarded by the `rhenium:managedRating` ownership stamp
-  (only a rating whose on-disk value still equals our stamp is touched — a foreign
-  Lightroom rating is never destroyed). Live changes while enabled write only the
-  delta; disable stops watching and leaves sidecars in place. Per-root on/off
-  persists to `.photo-selector-xmp-sync.json`. Export stays RAW-only (JPEG/HEIC
-  are counted as skipped, not embedded).
+- **XMP sidecar sync: enable is a FULL whole-root reconcile, not a write-only
+  pass.** `XmpSyncCoordinator` must walk *every* root photo on enable, not just
+  the current favourites/rejects — else a photo that *left* both buckets is never
+  visited and its stale sidecar rating (which the `rhenium:managedRating` stamp
+  would otherwise clear) silently survives.
 
 ## Files worth knowing
 
