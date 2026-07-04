@@ -52,11 +52,24 @@ import com.vishalgupta.photoselector.domain.model.Photo
 import com.vishalgupta.photoselector.presentation.designsystem.atom.FavouriteStar
 import com.vishalgupta.photoselector.presentation.designsystem.atom.LoadingIndicator
 import com.vishalgupta.photoselector.presentation.designsystem.atom.RejectFlag
+import com.vishalgupta.photoselector.presentation.designsystem.molecule.ErrorPlaceholder
 import com.vishalgupta.photoselector.presentation.designsystem.theme.AppTheme
 import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.persistentListOf
 
 private const val THUMBNAIL_VIEWPORT_PX = 320
+
+/**
+ * The tile's decode lifecycle. A stable, closed set (object/data-class members) so reading it stays
+ * cheap and the tile keeps strong-skipping on unrelated flips (focus/selection/favourite). [Failed]
+ * is terminal for a given photo id — the loader returns null on a genuine decode failure just as it
+ * does while in flight, so the two must be distinguished here rather than by the null bitmap alone.
+ */
+private sealed interface TileImage {
+    data object Loading : TileImage
+    data class Loaded(val bmp: ImageBitmap) : TileImage
+    data object Failed : TileImage
+}
 
 /**
  * A square photo tile: decoded image (cropped to fill), an optional star marking
@@ -111,8 +124,12 @@ fun PhotoThumbnail(
     onReview: (() -> Unit)? = null,
     withinBurst: Boolean = false,
 ) {
-    val bitmap by produceState<ImageBitmap?>(null, photo.id) {
+    // Tri-state so a failed decode reads as a broken tile, not an eternal spinner: [loader.load]
+    // returns null both while in flight AND on a genuine decode failure (no decoder / decode throws),
+    // and the key never changes, so a null result is otherwise indistinguishable from "still loading".
+    val image by produceState<TileImage>(TileImage.Loading, photo.id) {
         value = loader.load(photo, viewportLongEdgePx = THUMBNAIL_VIEWPORT_PX)
+            ?.let(TileImage::Loaded) ?: TileImage.Failed
     }
     // Selection's accent ring takes precedence over the focus cursor on the rare tile that is both;
     // an expanded-burst frame carries a dim bracket ring only when neither of those is present.
@@ -162,16 +179,17 @@ fun PhotoThumbnail(
     // the full-cell tile (single) or in the inset child over the deck (group), so both paths render
     // the identical content; it just aligns to the cover bounds in each case.
     val cover: @Composable BoxScope.() -> Unit = {
-        val bmp = bitmap
-        if (bmp != null) {
-            Image(
-                bitmap = bmp,
+        when (val current = image) {
+            is TileImage.Loaded -> Image(
+                bitmap = current.bmp,
                 contentDescription = photo.fileName,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
             )
-        } else {
-            LoadingIndicator()
+            // A genuine decode failure (corrupt bytes, no decoder) reads as a broken tile — the same
+            // ErrorPlaceholder the browser and survey grid use — instead of an endless fake spinner.
+            TileImage.Failed -> ErrorPlaceholder("Can't open this photo.", Modifier.fillMaxSize())
+            TileImage.Loading -> LoadingIndicator()
         }
         // A rejected tile is dimmed (it visibly recedes in the contact sheet) and flagged top-end.
         // Reject is the cull's negative half, so it takes the star's corner and suppresses it — a
