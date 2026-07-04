@@ -16,7 +16,9 @@ import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -77,6 +79,7 @@ import com.vishalgupta.photoselector.presentation.common.CategoryToggle
 import com.vishalgupta.photoselector.presentation.common.GroupingMode
 import com.vishalgupta.photoselector.presentation.common.NativeFileDialogs
 import com.vishalgupta.photoselector.presentation.common.customCategories
+import com.vishalgupta.photoselector.presentation.common.rememberAutoDismiss
 import com.vishalgupta.photoselector.presentation.designsystem.atom.AppOutlinedButton
 import com.vishalgupta.photoselector.presentation.designsystem.molecule.BurstExpandedFooter
 import com.vishalgupta.photoselector.presentation.designsystem.molecule.BurstExpandedHeader
@@ -98,8 +101,7 @@ import com.vishalgupta.photoselector.presentation.navigation.CategoryScope
 import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toImmutableList
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 @Composable
@@ -132,37 +134,20 @@ fun GridScreen(
     val coroutineScope = rememberCoroutineScope()
 
     // Surface the one-shot toggle confirmation as a transient pill (mirrors the browser).
-    var categoryToast by remember { mutableStateOf<CategoryToggle?>(null) }
-    LaunchedEffect(viewModel) {
-        viewModel.toggleEvents.collectLatest { event ->
-            categoryToast = event
-            delay(1200)
-            categoryToast = null
-        }
-    }
+    val categoryToast by rememberAutoDismiss(viewModel.toggleEvents, CATEGORY_TOAST_MS)
 
     // The "what the lens found" notice, fired once per user lens pick (see GroupingOutcome). collectLatest
-    // so a quick second lens pick replaces the previous notice rather than queueing it behind the timer.
-    var groupingNotice by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(viewModel) {
-        viewModel.groupingOutcomes.collectLatest { outcome ->
-            groupingNotice = groupingNoticeText(outcome)
-            delay(GROUPING_NOTICE_MS)
-            groupingNotice = null
-        }
-    }
+    // (inside the helper) so a quick second lens pick replaces the previous notice rather than queueing it
+    // behind the timer. The outcome is mapped to copy upstream, remembered so the flow identity is stable.
+    val groupingNotice by rememberAutoDismiss(
+        remember(viewModel) { viewModel.groupingOutcomes.map(::groupingNoticeText) },
+        GROUPING_NOTICE_MS,
+    )
 
     // The bulk/library action result (export, copy, bulk file, delete) — a consume-once one-shot,
     // collected here and shown as a transient pill. Modelled off [messages] (a channel) rather than
     // persistent state, so navigating away mid-toast can't strand a stale message that re-shows on return.
-    var resultToast by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(viewModel) {
-        viewModel.messages.collectLatest { message ->
-            resultToast = message
-            delay(TOAST_DURATION_MS)
-            resultToast = null
-        }
-    }
+    val resultToast by rememberAutoDismiss(viewModel.messages, TOAST_DURATION_MS)
 
     GridScreen(
         state = state,
@@ -540,218 +525,48 @@ fun GridScreen(
                 )
             },
     ) {
-        if (state.hasSelection) {
-            GridSelectionTopBar(
-                selectedCount = state.selection.size,
-                customCategories = customCategories,
-                onFileIntoFavourites = onFileSelectionIntoFavourites,
-                onFileIntoRejects = onFileSelectionIntoRejects,
-                onFileIntoCustom = onFileSelectionIntoCustom,
-                onExportSelectionTxt = onExportSelectionTxt,
-                onCopySelection = onCopySelection,
-                onDeleteSelection = { confirmingDelete = true },
-                onClearSelection = onClearSelection,
-            )
-        } else {
-            GridTopBar(
-                scope = state.scope,
-                currentCategory = currentCategory,
-                photoCount = state.photos.size,
-                isBusy = state.isBusy,
-                railCollapsed = railCollapsed,
-                onToggleRail = onToggleRail,
-                onExportTxt = onExportTxt,
-                onCopyToFolder = onCopyToFolder,
-                groupingMode = state.groupingMode,
-                onSelectGroupingMode = onSelectGroupingModeAnchored,
-                similarityProgress = state.similarityProgress
-                    ?.takeIf { it.total > 0 }
-                    ?.let { it.processed.toFloat() / it.total },
-            )
-        }
-
-        // Non-blocking determinate progress while a grouping lens computes. Unlike the busy bar above
-        // it doesn't lock the toolbar — the user can keep scrolling the singles grid while the model
-        // works. Two independent sources: the inline Time regroup (sub-second, the bare bar) reads
-        // [grouping]; the background Similarity pass reads [similarityProgress]. The Similarity pass is
-        // a ~minute-long on-device run, so it gets the framing banner (what's happening + the privacy
-        // line) while it is the displayed lens; in any other lens its progress shows only on the tab.
-        state.grouping?.takeIf { it.total > 0 }?.let { g ->
-            BusyBar(
-                label = "Grouping ${g.processed} / ${g.total}",
-                progress = g.processed.toFloat() / g.total,
-            )
-        }
-        state.similarityProgress
-            ?.takeIf { it.total > 0 && state.groupingMode == GroupingMode.Similarity }
-            ?.let { g -> GroupingProgressBanner(processed = g.processed, total = g.total) }
-
-        // First-run callout for the Similarity lens — a dismissible card under the toolbar (near the
-        // lens toggle), not a modal: the user can ignore it and keep culling. Shown once, then never.
-        // Eases in (and out on dismiss) so it doesn't snap the grid down beneath it.
-        AnimatedVisibility(
-            visible = state.showSimilarityCoachmark,
-            enter = fadeIn() + expandVertically(),
-            exit = fadeOut() + shrinkVertically(),
-        ) {
-            SimilarityCoachmark(onDismiss = onDismissSimilarityCoachmark)
-        }
+        GridHeader(
+            state = state,
+            currentCategory = currentCategory,
+            customCategories = customCategories,
+            railCollapsed = railCollapsed,
+            onToggleRail = onToggleRail,
+            onExportTxt = onExportTxt,
+            onCopyToFolder = onCopyToFolder,
+            onSelectGroupingMode = onSelectGroupingModeAnchored,
+            onFileSelectionIntoFavourites = onFileSelectionIntoFavourites,
+            onFileSelectionIntoRejects = onFileSelectionIntoRejects,
+            onFileSelectionIntoCustom = onFileSelectionIntoCustom,
+            onExportSelectionTxt = onExportSelectionTxt,
+            onCopySelection = onCopySelection,
+            onConfirmDelete = { confirmingDelete = true },
+            onClearSelection = onClearSelection,
+            onDismissSimilarityCoachmark = onDismissSimilarityCoachmark,
+        )
 
         Box(Modifier.weight(1f).fillMaxWidth()) {
-            if (state.photos.isEmpty()) {
-                GridEmptyState(
-                    scope = state.scope,
-                    currentCategory = currentCategory,
-                    customCategories = customCategories,
-                    onChangeFolder = onChangeFolder,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            } else {
-                LazyVerticalGrid(
-                    state = gridState,
-                    columns = GridCells.Adaptive(AppTheme.dimens.thumbnailMinCell),
-                    // Tight contact-sheet gutters. `end` stays wider than the others to leave a
-                    // lane for the overlaid scrollbar (xs pad + thickness ~= 12dp) without the
-                    // last column running under it.
-                    contentPadding = PaddingValues(
-                        start = AppTheme.spacing.sm,
-                        end = AppTheme.spacing.lg,
-                        top = AppTheme.spacing.sm,
-                        bottom = AppTheme.spacing.sm,
-                    ),
-                    verticalArrangement = Arrangement.spacedBy(AppTheme.spacing.xs),
-                    horizontalArrangement = Arrangement.spacedBy(AppTheme.spacing.xs),
-                ) {
-                    items(
-                        items = renderItems,
-                        // The burst header spans the full row so the frames beneath it read as one
-                        // section; tiles take a single cell.
-                        span = { item ->
-                            when (item) {
-                                is GridRenderItem.BurstHeader -> GridItemSpan(maxLineSpan)
-                                is GridRenderItem.BurstFooter -> GridItemSpan(maxLineSpan)
-                                is GridRenderItem.Tile -> GridItemSpan(1)
-                            }
-                        },
-                        key = { item ->
-                            when (item) {
-                                is GridRenderItem.BurstHeader -> "burst-header:" + item.burst.groupId.value
-                                is GridRenderItem.BurstFooter -> "burst-footer:" + item.burst.groupId.value
-                                is GridRenderItem.Tile -> item.group.groupId.value
-                            }
-                        },
-                    ) { item ->
-                        // Placement-only reflow shared by every render item, so the whole row set
-                        // slides as one when a burst unfolds/folds or the lens regroups. The fade is
-                        // off (null specs); an unfolding burst's frames pop in instead (below).
-                        val itemMotion = Modifier.animateItem(
-                            fadeInSpec = null,
-                            placementSpec = GRID_ITEM_PLACEMENT_SPEC,
-                            fadeOutSpec = null,
-                        )
-                        when (item) {
-                            is GridRenderItem.BurstHeader -> BurstExpandedHeader(
-                                frameCount = item.burst.photos.size,
-                                onCollapse = onCollapseBurst,
-                                modifier = itemMotion,
-                            )
-                            is GridRenderItem.BurstFooter -> BurstExpandedFooter(modifier = itemMotion)
-                            is GridRenderItem.Tile -> {
-                                val group = item.group
-                                val index = item.displayIndex
-                                val keyPhoto = group.keyPhoto
-                                PhotoThumbnail(
-                                    // An unfolded burst frame pops in (scale); every other tile just
-                                    // slides via the shared placement spring.
-                                    modifier = if (item.expandedFrame) itemMotion.gridAppearPop() else itemMotion,
-                                    photo = keyPhoto,
-                                    loader = imageLoader,
-                                    isMarked = keyPhoto.id in state.markedIds,
-                                    isRejected = keyPhoto.id in state.rejectedIds,
-                                    isFocused = index == state.focusedIndex,
-                                    // Any frame of the run counts: a collapsed burst shows the
-                                    // middle frame as its key, but you may have opened (and last
-                                    // viewed) a different frame, so match against the whole run.
-                                    isLastViewed = group.photos.any { it.id == state.lastViewedPhotoId },
-                                    // A collapsed burst reads as selected only when its whole run is
-                                    // selected, matching the whole-burst pick in toggleSelection.
-                                    isSelected = group.photos.all { it.id in state.selection },
-                                    onClick = { openTile(index) },
-                                    onToggleSelect = { onToggleSelection(index) },
-                                    onRangeSelect = { onSelectRange(index) },
-                                    categoryBadges = categoryBadgesFor(keyPhoto, customCategories, state.memberships),
-                                    burstCount = (group as? PhotoGroup.Burst)?.photos?.size,
-                                    // The glyph echoes the active lens, and onReview opens the run
-                                    // side by side. Both null for singles and for an expanded burst's
-                                    // individual frames (those open the browser, not a review).
-                                    groupGlyph = if (group is PhotoGroup.Burst) groupGlyphFor(state.groupingMode) else null,
-                                    onReview = if (group is PhotoGroup.Burst) {
-                                        { openReview(index) }
-                                    } else {
-                                        null
-                                    },
-                                    withinBurst = item.expandedFrame,
-                                )
-                            }
-                        }
-                    }
-                }
-                val scrollbarAdapter = rememberScrollbarAdapter(gridState)
-                VerticalScrollbar(
-                    // Wrapped to swallow the transient NaN the lazy-grid adapter emits while the grid
-                    // reshapes under animateItem (a lens regroup or burst expand/collapse) - see
-                    // [NanSafeScrollbarAdapter]. Without it the scrollbar crashes mid-measure.
-                    adapter = remember(scrollbarAdapter) { NanSafeScrollbarAdapter(scrollbarAdapter) },
-                    interactionSource = scrollbarInteraction,
-                    modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight().padding(end = AppTheme.spacing.xs),
-                    style = ScrollbarStyle(
-                        minimalHeight = AppTheme.dimens.scrollbarMinHeight,
-                        thickness = AppTheme.dimens.scrollbarThickness,
-                        shape = MaterialTheme.shapes.small,
-                        hoverDurationMillis = 300,
-                        unhoverColor = AppTheme.colors.scrollbarIdle,
-                        hoverColor = AppTheme.colors.scrollbarHover,
-                    ),
-                )
-            }
-
-            // The blocking busy strip (export / copy in flight) is overlaid at the top of the grid,
-            // not stacked in the Column above it: as a Column child a bare `if (isBusy)` inserted a
-            // row that shoved the weight-1f grid down and snapped it back on every export (a visible
-            // flicker). Fading it in over the grid keeps the grid still.
-            GridBusyOverlay(
-                visible = state.isBusy,
-                label = state.progressLabel ?: "Working…",
-                modifier = Modifier.align(Alignment.TopCenter),
+            GridContent(
+                state = state,
+                gridState = gridState,
+                renderItems = renderItems,
+                currentCategory = currentCategory,
+                customCategories = customCategories,
+                imageLoader = imageLoader,
+                openTile = openTile,
+                openReview = openReview,
+                onToggleSelection = onToggleSelection,
+                onSelectRange = onSelectRange,
+                onCollapseBurst = onCollapseBurst,
+                onChangeFolder = onChangeFolder,
+                scrollbarInteraction = scrollbarInteraction,
             )
 
-            // Result/notice for bulk and library-level actions (export, copy, bulk file, the survey
-            // cap notice) — rendered in the app's pill chrome, not a stock Material snackbar, so all
-            // of the grid's transient feedback reads as one family.
-            GridMessagePill(
-                message = resultToast,
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = AppTheme.spacing.lg),
-            )
-
-            // Transient confirmation that the last F / 1..9 toggle landed and what it did. The
-            // tile's star/badge shows the resulting state; this names the action, the way the
-            // browser's pill does.
-            GridTogglePill(
-                toast = categoryToast,
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = AppTheme.spacing.lg),
-            )
-
-            // The grouping payoff / empty-result notice, fired once per user lens pick. Sits a row
-            // higher than the action pills above so a coincident toggle/result pill doesn't collide.
-            GridMessagePill(
-                message = groupingNotice,
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = GROUPING_NOTICE_BOTTOM_PADDING),
+            GridOverlays(
+                isBusy = state.isBusy,
+                progressLabel = state.progressLabel,
+                resultToast = resultToast,
+                categoryToast = categoryToast,
+                groupingNotice = groupingNotice,
             )
         }
 
@@ -802,6 +617,284 @@ fun GridScreen(
             onDismiss = { confirmingDelete = false },
         )
     }
+}
+
+/**
+ * The grid's header stack: the toolbar (the selection top bar when a multi-select is active, else the
+ * library top bar), the determinate grouping progress bars, and the first-run Similarity coachmark.
+ * Purely a render of [state] + callbacks — the inner top bars receive the pre-derived [currentCategory]
+ * / [customCategories] (remembered by the caller) so they stay skippable across an unrelated cursor move.
+ */
+@Composable
+private fun ColumnScope.GridHeader(
+    state: GridUiState,
+    currentCategory: Category?,
+    customCategories: List<Category>,
+    railCollapsed: Boolean,
+    onToggleRail: () -> Unit,
+    onExportTxt: () -> Unit,
+    onCopyToFolder: (ConflictPolicy) -> Unit,
+    onSelectGroupingMode: (GroupingMode) -> Unit,
+    onFileSelectionIntoFavourites: () -> Unit,
+    onFileSelectionIntoRejects: () -> Unit,
+    onFileSelectionIntoCustom: (slot: Int) -> Unit,
+    onExportSelectionTxt: () -> Unit,
+    onCopySelection: (ConflictPolicy) -> Unit,
+    onConfirmDelete: () -> Unit,
+    onClearSelection: () -> Unit,
+    onDismissSimilarityCoachmark: () -> Unit,
+) {
+    if (state.hasSelection) {
+        GridSelectionTopBar(
+            selectedCount = state.selection.size,
+            customCategories = customCategories,
+            onFileIntoFavourites = onFileSelectionIntoFavourites,
+            onFileIntoRejects = onFileSelectionIntoRejects,
+            onFileIntoCustom = onFileSelectionIntoCustom,
+            onExportSelectionTxt = onExportSelectionTxt,
+            onCopySelection = onCopySelection,
+            onDeleteSelection = onConfirmDelete,
+            onClearSelection = onClearSelection,
+        )
+    } else {
+        GridTopBar(
+            scope = state.scope,
+            currentCategory = currentCategory,
+            photoCount = state.photos.size,
+            isBusy = state.isBusy,
+            railCollapsed = railCollapsed,
+            onToggleRail = onToggleRail,
+            onExportTxt = onExportTxt,
+            onCopyToFolder = onCopyToFolder,
+            groupingMode = state.groupingMode,
+            onSelectGroupingMode = onSelectGroupingMode,
+            similarityProgress = state.similarityProgress
+                ?.takeIf { it.total > 0 }
+                ?.let { it.processed.toFloat() / it.total },
+        )
+    }
+
+    // Non-blocking determinate progress while a grouping lens computes. Unlike the busy bar above
+    // it doesn't lock the toolbar — the user can keep scrolling the singles grid while the model
+    // works. Two independent sources: the inline Time regroup (sub-second, the bare bar) reads
+    // [grouping]; the background Similarity pass reads [similarityProgress]. The Similarity pass is
+    // a ~minute-long on-device run, so it gets the framing banner (what's happening + the privacy
+    // line) while it is the displayed lens; in any other lens its progress shows only on the tab.
+    state.grouping?.takeIf { it.total > 0 }?.let { g ->
+        BusyBar(
+            label = "Grouping ${g.processed} / ${g.total}",
+            progress = g.processed.toFloat() / g.total,
+        )
+    }
+    state.similarityProgress
+        ?.takeIf { it.total > 0 && state.groupingMode == GroupingMode.Similarity }
+        ?.let { g -> GroupingProgressBanner(processed = g.processed, total = g.total) }
+
+    // First-run callout for the Similarity lens — a dismissible card under the toolbar (near the
+    // lens toggle), not a modal: the user can ignore it and keep culling. Shown once, then never.
+    // Eases in (and out on dismiss) so it doesn't snap the grid down beneath it.
+    AnimatedVisibility(
+        visible = state.showSimilarityCoachmark,
+        enter = fadeIn() + expandVertically(),
+        exit = fadeOut() + shrinkVertically(),
+    ) {
+        SimilarityCoachmark(onDismiss = onDismissSimilarityCoachmark)
+    }
+}
+
+/**
+ * The grid body: the empty-state guidance when there are no photos, otherwise the contact-sheet
+ * [LazyVerticalGrid] of tiles (bursts collapse to one tile; an open burst unfolds in place) with its
+ * overlaid scrollbar. Focus/keyboard live on the enclosing Column, not here, so this stays a pure
+ * render of [state] + the (remembered) tile resolvers. Every per-tile input is read here exactly as
+ * before, so tile skippability is unchanged.
+ */
+@Composable
+private fun BoxScope.GridContent(
+    state: GridUiState,
+    gridState: LazyGridState,
+    renderItems: List<GridRenderItem>,
+    currentCategory: Category?,
+    customCategories: List<Category>,
+    imageLoader: ImageLoader,
+    openTile: (TileIndex) -> Unit,
+    openReview: (TileIndex) -> Unit,
+    onToggleSelection: (TileIndex) -> Unit,
+    onSelectRange: (TileIndex) -> Unit,
+    onCollapseBurst: () -> Unit,
+    onChangeFolder: () -> Unit,
+    scrollbarInteraction: MutableInteractionSource,
+) {
+    if (state.photos.isEmpty()) {
+        GridEmptyState(
+            scope = state.scope,
+            currentCategory = currentCategory,
+            customCategories = customCategories,
+            onChangeFolder = onChangeFolder,
+            modifier = Modifier.fillMaxSize(),
+        )
+    } else {
+        LazyVerticalGrid(
+            state = gridState,
+            columns = GridCells.Adaptive(AppTheme.dimens.thumbnailMinCell),
+            // Tight contact-sheet gutters. `end` stays wider than the others to leave a
+            // lane for the overlaid scrollbar (xs pad + thickness ~= 12dp) without the
+            // last column running under it.
+            contentPadding = PaddingValues(
+                start = AppTheme.spacing.sm,
+                end = AppTheme.spacing.lg,
+                top = AppTheme.spacing.sm,
+                bottom = AppTheme.spacing.sm,
+            ),
+            verticalArrangement = Arrangement.spacedBy(AppTheme.spacing.xs),
+            horizontalArrangement = Arrangement.spacedBy(AppTheme.spacing.xs),
+        ) {
+            items(
+                items = renderItems,
+                // The burst header spans the full row so the frames beneath it read as one
+                // section; tiles take a single cell.
+                span = { item ->
+                    when (item) {
+                        is GridRenderItem.BurstHeader -> GridItemSpan(maxLineSpan)
+                        is GridRenderItem.BurstFooter -> GridItemSpan(maxLineSpan)
+                        is GridRenderItem.Tile -> GridItemSpan(1)
+                    }
+                },
+                key = { item ->
+                    when (item) {
+                        is GridRenderItem.BurstHeader -> "burst-header:" + item.burst.groupId.value
+                        is GridRenderItem.BurstFooter -> "burst-footer:" + item.burst.groupId.value
+                        is GridRenderItem.Tile -> item.group.groupId.value
+                    }
+                },
+            ) { item ->
+                // Placement-only reflow shared by every render item, so the whole row set
+                // slides as one when a burst unfolds/folds or the lens regroups. The fade is
+                // off (null specs); an unfolding burst's frames pop in instead (below).
+                val itemMotion = Modifier.animateItem(
+                    fadeInSpec = null,
+                    placementSpec = GRID_ITEM_PLACEMENT_SPEC,
+                    fadeOutSpec = null,
+                )
+                when (item) {
+                    is GridRenderItem.BurstHeader -> BurstExpandedHeader(
+                        frameCount = item.burst.photos.size,
+                        onCollapse = onCollapseBurst,
+                        modifier = itemMotion,
+                    )
+                    is GridRenderItem.BurstFooter -> BurstExpandedFooter(modifier = itemMotion)
+                    is GridRenderItem.Tile -> {
+                        val group = item.group
+                        val index = item.displayIndex
+                        val keyPhoto = group.keyPhoto
+                        PhotoThumbnail(
+                            // An unfolded burst frame pops in (scale); every other tile just
+                            // slides via the shared placement spring.
+                            modifier = if (item.expandedFrame) itemMotion.gridAppearPop() else itemMotion,
+                            photo = keyPhoto,
+                            loader = imageLoader,
+                            isMarked = keyPhoto.id in state.markedIds,
+                            isRejected = keyPhoto.id in state.rejectedIds,
+                            isFocused = index == state.focusedIndex,
+                            // Any frame of the run counts: a collapsed burst shows the
+                            // middle frame as its key, but you may have opened (and last
+                            // viewed) a different frame, so match against the whole run.
+                            isLastViewed = group.photos.any { it.id == state.lastViewedPhotoId },
+                            // A collapsed burst reads as selected only when its whole run is
+                            // selected, matching the whole-burst pick in toggleSelection.
+                            isSelected = group.photos.all { it.id in state.selection },
+                            onClick = { openTile(index) },
+                            onToggleSelect = { onToggleSelection(index) },
+                            onRangeSelect = { onSelectRange(index) },
+                            categoryBadges = categoryBadgesFor(keyPhoto, customCategories, state.memberships),
+                            burstCount = (group as? PhotoGroup.Burst)?.photos?.size,
+                            // The glyph echoes the active lens, and onReview opens the run
+                            // side by side. Both null for singles and for an expanded burst's
+                            // individual frames (those open the browser, not a review).
+                            groupGlyph = if (group is PhotoGroup.Burst) groupGlyphFor(state.groupingMode) else null,
+                            onReview = if (group is PhotoGroup.Burst) {
+                                { openReview(index) }
+                            } else {
+                                null
+                            },
+                            withinBurst = item.expandedFrame,
+                        )
+                    }
+                }
+            }
+        }
+        val scrollbarAdapter = rememberScrollbarAdapter(gridState)
+        VerticalScrollbar(
+            // Wrapped to swallow the transient NaN the lazy-grid adapter emits while the grid
+            // reshapes under animateItem (a lens regroup or burst expand/collapse) - see
+            // [NanSafeScrollbarAdapter]. Without it the scrollbar crashes mid-measure.
+            adapter = remember(scrollbarAdapter) { NanSafeScrollbarAdapter(scrollbarAdapter) },
+            interactionSource = scrollbarInteraction,
+            modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight().padding(end = AppTheme.spacing.xs),
+            style = ScrollbarStyle(
+                minimalHeight = AppTheme.dimens.scrollbarMinHeight,
+                thickness = AppTheme.dimens.scrollbarThickness,
+                shape = MaterialTheme.shapes.small,
+                hoverDurationMillis = 300,
+                unhoverColor = AppTheme.colors.scrollbarIdle,
+                hoverColor = AppTheme.colors.scrollbarHover,
+            ),
+        )
+    }
+}
+
+/**
+ * The transient overlays stacked over the grid body: the blocking busy strip (faded in at the top so
+ * it doesn't shove the grid down) and the bottom-center pill family (bulk/library result, keyboard
+ * toggle confirmation, and the grouping payoff notice — lifted a row higher so it never collides with
+ * the action pills). Leaf overlays only; the caller supplies the already-timed pill state.
+ */
+@Composable
+private fun BoxScope.GridOverlays(
+    isBusy: Boolean,
+    progressLabel: String?,
+    resultToast: String?,
+    categoryToast: CategoryToggle?,
+    groupingNotice: String?,
+) {
+    // The blocking busy strip (export / copy in flight) is overlaid at the top of the grid,
+    // not stacked in the Column above it: as a Column child a bare `if (isBusy)` inserted a
+    // row that shoved the weight-1f grid down and snapped it back on every export (a visible
+    // flicker). Fading it in over the grid keeps the grid still.
+    GridBusyOverlay(
+        visible = isBusy,
+        label = progressLabel ?: "Working…",
+        modifier = Modifier.align(Alignment.TopCenter),
+    )
+
+    // Result/notice for bulk and library-level actions (export, copy, bulk file, the survey
+    // cap notice) — rendered in the app's pill chrome, not a stock Material snackbar, so all
+    // of the grid's transient feedback reads as one family.
+    GridMessagePill(
+        message = resultToast,
+        modifier = Modifier
+            .align(Alignment.BottomCenter)
+            .padding(bottom = AppTheme.spacing.lg),
+    )
+
+    // Transient confirmation that the last F / 1..9 toggle landed and what it did. The
+    // tile's star/badge shows the resulting state; this names the action, the way the
+    // browser's pill does.
+    GridTogglePill(
+        toast = categoryToast,
+        modifier = Modifier
+            .align(Alignment.BottomCenter)
+            .padding(bottom = AppTheme.spacing.lg),
+    )
+
+    // The grouping payoff / empty-result notice, fired once per user lens pick. Sits a row
+    // higher than the action pills above so a coincident toggle/result pill doesn't collide.
+    GridMessagePill(
+        message = groupingNotice,
+        modifier = Modifier
+            .align(Alignment.BottomCenter)
+            .padding(bottom = GROUPING_NOTICE_BOTTOM_PADDING),
+    )
 }
 
 /**
@@ -965,6 +1058,9 @@ private fun Modifier.gridAppearPop(): Modifier {
         scaleY = scale.value
     }
 }
+
+/** How long the keyboard category-toggle confirmation pill stays up before it fades out. */
+private const val CATEGORY_TOAST_MS = 1200L
 
 /** How long a [GridMessagePill] result/notice stays up before it fades out. */
 private const val TOAST_DURATION_MS = 2500L
