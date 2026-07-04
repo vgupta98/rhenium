@@ -121,7 +121,9 @@ architecture, single Gradle module: `domain` (pure) → `data` (impls) →
   `progress` flow for the off-grid hint), `XmpSyncCoordinator` (root-scoped,
   retained per root; when enabled, runs a full whole-root reconcile then live
   delta-writes RAW sidecars on membership changes — mirrors `GroupingCoordinator`'s
-  lifecycle; drives `ExportPhotosXmpUseCase`), `HoverOverlay`, `PlatformLabels`.
+  lifecycle; drives `ExportPhotosXmpUseCase`), `HoverOverlay`, `PlatformLabels`,
+  `AutoDismiss` (`rememberAutoDismiss` — the shared flow-into-transient-pill collector
+  with a per-call timeout + optional reset key; the grid and browser toast/notice pills).
 
 ## presentation/designsystem/ — Atomic Design
 

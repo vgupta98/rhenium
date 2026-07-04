@@ -48,6 +48,7 @@ import com.vishalgupta.photoselector.presentation.common.HoverOverlay
 import com.vishalgupta.photoselector.presentation.common.SystemActions
 import com.vishalgupta.photoselector.presentation.common.customCategories
 import com.vishalgupta.photoselector.presentation.common.digitSlot
+import com.vishalgupta.photoselector.presentation.common.rememberAutoDismiss
 import com.vishalgupta.photoselector.presentation.designsystem.atom.LoadingIndicator
 import com.vishalgupta.photoselector.presentation.designsystem.molecule.BrowserKeyboardLegend
 import com.vishalgupta.photoselector.presentation.designsystem.molecule.CategoryTogglePill
@@ -59,7 +60,6 @@ import com.vishalgupta.photoselector.presentation.designsystem.organism.BrowserC
 import com.vishalgupta.photoselector.presentation.designsystem.organism.BrowserTopBar
 import com.vishalgupta.photoselector.presentation.designsystem.theme.AppTheme
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.collectLatest
 
 @Composable
 fun BrowserScreen(
@@ -79,31 +79,13 @@ fun BrowserScreen(
 ) {
     DisposableEffect(viewModel, manageLifecycle) { onDispose { if (manageLifecycle) viewModel.onClear() } }
     val state by viewModel.state.collectAsState()
-    var toast by remember { mutableStateOf<CategoryToggle?>(null) }
-    var deleteMessage by remember { mutableStateOf<String?>(null) }
+    // The confirmation toast also clears the moment the shown photo changes (resetKey), so a lingering
+    // "Added to Favourites" from the previous frame doesn't ride along to the next one.
+    val toast by rememberAutoDismiss(viewModel.toggleEvents, TOGGLE_TOAST_MS, resetKey = state.currentPhoto?.id)
+    val deleteMessage by rememberAutoDismiss(viewModel.deleteEvents, DELETE_MESSAGE_MS)
 
     LaunchedEffect(Unit) {
         viewModel.loadIfNeeded()
-    }
-
-    LaunchedEffect(viewModel) {
-        viewModel.toggleEvents.collectLatest { event ->
-            toast = event
-            delay(1200)
-            toast = null
-        }
-    }
-
-    LaunchedEffect(viewModel) {
-        viewModel.deleteEvents.collectLatest { message ->
-            deleteMessage = message
-            delay(1600)
-            deleteMessage = null
-        }
-    }
-
-    LaunchedEffect(state.currentPhoto?.id) {
-        toast = null
     }
 
     BrowserScreen(
@@ -370,3 +352,9 @@ fun BrowserScreen(
         }
     }
 }
+
+/** How long a category-toggle confirmation pill stays up. */
+private const val TOGGLE_TOAST_MS = 1200L
+
+/** How long the move-to-Trash confirmation / failure pill stays up. */
+private const val DELETE_MESSAGE_MS = 1600L
