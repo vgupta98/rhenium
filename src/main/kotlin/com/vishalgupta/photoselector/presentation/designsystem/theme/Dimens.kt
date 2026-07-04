@@ -45,6 +45,9 @@ data class Dimens(
     // The whole deck is drawn *inside* the cell (the cover photo is inset by this much on its top
     // and end), so the peeking edges never bleed into the grid gutters or the neighbouring tile.
     val burstStackInset: Dp = 10.dp,
+    // Max width of a centered supporting-copy line (the root picker's guidance/count text), so the
+    // prose wraps to a comfortable measure rather than stretching across a wide window.
+    val supportingTextMaxWidth: Dp = 360.dp,
 )
 
 val LocalDimens = staticCompositionLocalOf { Dimens() }
