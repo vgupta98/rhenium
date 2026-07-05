@@ -12,7 +12,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -22,7 +21,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.dp
 import com.vishalgupta.photoselector.presentation.common.NativeFileDialogs
 import com.vishalgupta.photoselector.presentation.designsystem.atom.AppButton
 import com.vishalgupta.photoselector.presentation.designsystem.atom.AppOutlinedButton
@@ -68,14 +66,14 @@ fun RootFolderPickerScreen(
             Icon(
                 Icons.Outlined.PhotoLibrary,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                tint = AppTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(AppTheme.dimens.iconLg),
             )
-            Text("Rhenium", style = MaterialTheme.typography.headlineLarge)
+            Text("Rhenium", style = AppTheme.typography.headlineLarge)
             Text(
                 "Thousands of shots, down to your best.",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = AppTheme.typography.titleMedium,
+                color = AppTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
             )
 
@@ -90,19 +88,19 @@ fun RootFolderPickerScreen(
                 }
                 RootPickerUiState.Phase.Scanning -> {
                     LoadingIndicator(Modifier.size(AppTheme.dimens.progressIndicatorLg))
-                    Text("Scanning…", style = MaterialTheme.typography.titleMedium)
+                    Text("Scanning…", style = AppTheme.typography.titleMedium)
                     SupportingText("${state.found} photos · ${state.scanned} files seen")
                     AppOutlinedButton(text = "Cancel", onClick = onCancelScan)
                 }
                 RootPickerUiState.Phase.Failed -> {
                     Text(
                         "Couldn't scan that folder",
-                        style = MaterialTheme.typography.titleMedium,
+                        style = AppTheme.typography.titleMedium,
                     )
                     Text(
                         state.errorMessage ?: "Unknown error",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.error,
+                        style = AppTheme.typography.bodyMedium,
+                        color = AppTheme.colorScheme.error,
                         textAlign = TextAlign.Center,
                     )
                     AppButton(text = "Try again", onClick = onPickFolder)
@@ -117,9 +115,9 @@ fun RootFolderPickerScreen(
 private fun SupportingText(text: String) {
     Text(
         text,
-        style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        style = AppTheme.typography.bodyMedium,
+        color = AppTheme.colorScheme.onSurfaceVariant,
         textAlign = TextAlign.Center,
-        modifier = Modifier.widthIn(max = 360.dp),
+        modifier = Modifier.widthIn(max = AppTheme.dimens.supportingTextMaxWidth),
     )
 }
