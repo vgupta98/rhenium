@@ -23,9 +23,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BurstMode
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
@@ -52,6 +49,8 @@ import com.vishalgupta.photoselector.domain.model.Photo
 import com.vishalgupta.photoselector.presentation.designsystem.atom.FavouriteStar
 import com.vishalgupta.photoselector.presentation.designsystem.atom.LoadingIndicator
 import com.vishalgupta.photoselector.presentation.designsystem.atom.RejectFlag
+import com.vishalgupta.photoselector.presentation.designsystem.atom.TileSignal
+import com.vishalgupta.photoselector.presentation.designsystem.atom.TileSignalChip
 import com.vishalgupta.photoselector.presentation.designsystem.molecule.ErrorPlaceholder
 import com.vishalgupta.photoselector.presentation.designsystem.theme.AppTheme
 import kotlinx.collections.immutable.ImmutableList
@@ -104,6 +103,13 @@ private sealed interface TileImage {
  *  - [onReview], when non-null, reveals a "Review N →" chip on hover that opens the run's frames in
  *    Compare/Survey straight away — the "decide now" path next to expand-in-place. Hover-only, so the
  *    keyboard path (a focused-group `C`) is the non-hover fallback the grid wires separately.
+ *
+ * [signals] is a feature-agnostic lane of small chips ([TileSignal]) drawn in an always-on band
+ * centered along the bottom edge (just above the [isLastViewed] underline, clear of the bottom-start
+ * burst pill and bottom-end select check), rendered only when non-empty. It is the surface a future
+ * on-device signal (eyes-open, sharpness, a smart-category hint) populates; the production grid passes
+ * an empty list today, so an empty lane is a no-op and the tile renders exactly as before. The list
+ * type is immutable so the tile stays strong-skippable.
  */
 @Composable
 fun PhotoThumbnail(
@@ -123,6 +129,7 @@ fun PhotoThumbnail(
     groupGlyph: ImageVector? = null,
     onReview: (() -> Unit)? = null,
     withinBurst: Boolean = false,
+    signals: ImmutableList<TileSignal> = persistentListOf(),
 ) {
     // Tri-state so a failed decode reads as a broken tile, not an eternal spinner: [loader.load]
     // returns null both while in flight AND on a genuine decode failure (no decoder / decode throws),
@@ -140,7 +147,7 @@ fun PhotoThumbnail(
         else -> null
     }
     val borderMod = if (ringColor != null) {
-        Modifier.border(AppTheme.dimens.focusBorderWidth, ringColor, MaterialTheme.shapes.small)
+        Modifier.border(AppTheme.dimens.focusBorderWidth, ringColor, AppTheme.shapes.small)
     } else {
         Modifier
     }
@@ -247,6 +254,20 @@ fun PhotoThumbnail(
                     .padding(AppTheme.spacing.xs),
             )
         }
+        // The feature-agnostic signal lane: an always-on band centered along the bottom edge, sitting
+        // just above the last-viewed underline and clear of the bottom-start pill / bottom-end check.
+        // Empty in the shipped path, so it adds nothing to a normal tile.
+        if (signals.isNotEmpty()) {
+            Row(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = AppTheme.dimens.lastViewedIndicatorHeight + AppTheme.spacing.xxs),
+                horizontalArrangement = Arrangement.spacedBy(AppTheme.spacing.xxs),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                signals.forEach { signal -> TileSignalChip(signal = signal) }
+            }
+        }
         if (isLastViewed) {
             Box(
                 Modifier
@@ -263,13 +284,13 @@ fun PhotoThumbnail(
                     .align(Alignment.BottomEnd)
                     .padding(AppTheme.spacing.xs)
                     .size(AppTheme.dimens.iconSm)
-                    .background(MaterialTheme.colorScheme.primary, CircleShape),
+                    .background(AppTheme.colorScheme.primary, CircleShape),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     imageVector = Icons.Filled.Check,
                     contentDescription = "Selected",
-                    tint = MaterialTheme.colorScheme.onPrimary,
+                    tint = AppTheme.colorScheme.onPrimary,
                     modifier = Modifier.fillMaxSize().padding(3.dp),
                 )
             }
@@ -381,25 +402,14 @@ private fun CategoryBadges(badges: ImmutableList<Int>, modifier: Modifier = Modi
  */
 @Composable
 private fun BurstBadge(count: Int, glyph: ImageVector, modifier: Modifier = Modifier) {
-    Surface(
+    TileSignalChip(
         modifier = modifier,
-        shape = MaterialTheme.shapes.small,
-        color = AppTheme.colors.overlayChromeBackground,
-        contentColor = AppTheme.colors.onOverlayChrome,
-    ) {
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(AppTheme.spacing.xxs),
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(horizontal = AppTheme.dimens.badgeInset, vertical = AppTheme.spacing.xxs),
-        ) {
-            Icon(
-                imageVector = glyph,
-                contentDescription = "Group of $count",
-                modifier = Modifier.size(AppTheme.dimens.iconSm),
-            )
-            Text(text = count.toString(), style = MaterialTheme.typography.labelLarge)
-        }
-    }
+        icon = glyph,
+        iconContentDescription = "Group of $count",
+        label = count.toString(),
+        textStyle = AppTheme.typography.labelLarge,
+        verticalPadding = AppTheme.spacing.xxs,
+    )
 }
 
 /**
@@ -410,37 +420,17 @@ private fun BurstBadge(count: Int, glyph: ImageVector, modifier: Modifier = Modi
  */
 @Composable
 private fun ReviewChip(count: Int, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    Surface(
+    TileSignalChip(
         modifier = modifier.clickable(onClick = onClick),
-        shape = MaterialTheme.shapes.small,
-        color = AppTheme.colors.overlayChromeBackground,
-        contentColor = AppTheme.colors.onOverlayChrome,
-    ) {
-        Text(
-            text = "Review $count →",
-            style = MaterialTheme.typography.labelMedium,
-            modifier = Modifier.padding(
-                horizontal = AppTheme.dimens.badgeInset,
-                vertical = AppTheme.dimens.badgeVerticalInset,
-            ),
-        )
-    }
+        label = "Review $count →",
+    )
 }
 
 @Composable
 private fun CategoryBadge(label: String) {
-    Surface(
-        shape = MaterialTheme.shapes.small,
+    TileSignalChip(
+        label = label,
         color = AppTheme.colors.categoryMemberContainer,
         contentColor = AppTheme.colors.categoryMemberContent,
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelMedium,
-            modifier = Modifier.padding(
-                horizontal = AppTheme.dimens.badgeInset,
-                vertical = AppTheme.dimens.badgeVerticalInset,
-            ),
-        )
-    }
+    )
 }

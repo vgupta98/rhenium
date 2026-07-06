@@ -70,6 +70,7 @@ private fun browserHints(
     if (canShowInAllPhotos) add(KeyHint("A", "All Photos"))
     add(KeyHint("R", "Reveal"))
     add(KeyHint("O", "Open"))
+    add(KeyHint("I", "Details"))
     add(KeyHint("+ − 0", "Zoom"))
     add(KeyHint("Esc", "Back"))
 }.toImmutableList()

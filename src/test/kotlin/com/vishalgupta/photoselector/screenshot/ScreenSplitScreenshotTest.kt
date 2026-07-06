@@ -29,6 +29,7 @@ import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.withKeyDown
 import androidx.compose.ui.unit.dp
 import com.vishalgupta.photoselector.data.image.ImageLoader
+import com.vishalgupta.photoselector.domain.grouping.CaptureMetadata
 import com.vishalgupta.photoselector.domain.model.Category
 import com.vishalgupta.photoselector.domain.model.CategoryId
 import com.vishalgupta.photoselector.domain.model.Photo
@@ -731,6 +732,91 @@ class ScreenSplitScreenshotTest {
         rule.waitForIdle()
         rule.onNodeWithText("Move this photo to Trash?").assertIsDisplayed()
         rule.dumpScreenshot("browser-delete-confirm", rule.onAllNodes(isRoot()).onLast())
+    }
+
+    private val captureMetadata = CaptureMetadata(
+        takenAtEpochMs = 1_700_000_000_000L,
+        cameraId = "Canon EOS R5",
+        orientation = 1,
+    )
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test
+    fun browser_detailsPanel() {
+        // `I` latches the right-side details panel open; the image re-centers to its left. The panel
+        // shows file facts plus the EXIF capture time/camera and the "AI insights - Coming soon" slot.
+        rule.setContent {
+            AppTheme {
+                Surface(Modifier.size(900.dp, 600.dp)) {
+                    BrowserScreen(
+                        state = BrowserUiState(
+                            photos = testPhotos,
+                            currentIndex = 0,
+                            currentPhoto = testPhotos[0],
+                            currentBitmap = ImageBitmap(200, 150),
+                            isLoadingBitmap = false,
+                            isCurrentFavourite = false,
+                            readOnly = false,
+                            categories = categories,
+                            captureMetadata = captureMetadata,
+                        ),
+                        toast = null,
+                        onPrevious = {},
+                        onNext = {},
+                        onToggleCategory = {},
+                        onViewportSizeChanged = {},
+                        onBackToGrid = {},
+                    )
+                }
+            }
+        }
+        rule.waitForIdle()
+        rule.onRoot().performKeyInput { pressKey(Key.I) }
+        rule.waitForIdle()
+        rule.onNodeWithText("Details").assertIsDisplayed()
+        rule.onNodeWithText("AI insights").assertIsDisplayed()
+        rule.dumpScreenshot("browser-details-panel")
+    }
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test
+    fun inspectBrowse_detailsPanel() {
+        // The same panel works in Inspect's embedded browse facet (the reused BrowserScreen), with the
+        // grid-view toggle still present. Here the photo has no readable EXIF, so capture/camera read
+        // "Not available" while file facts still show.
+        rule.setContent {
+            AppTheme {
+                Surface(Modifier.size(900.dp, 600.dp)) {
+                    BrowserScreen(
+                        state = BrowserUiState(
+                            photos = manyPhotos.take(5),
+                            currentIndex = 1,
+                            currentPhoto = manyPhotos[1],
+                            currentBitmap = ImageBitmap(200, 150),
+                            isLoadingBitmap = false,
+                            isCurrentFavourite = false,
+                            readOnly = false,
+                            categories = categories,
+                            captureMetadata = CaptureMetadata.NONE,
+                        ),
+                        toast = null,
+                        onPrevious = {},
+                        onNext = {},
+                        onToggleCategory = {},
+                        onViewportSizeChanged = {},
+                        onBackToGrid = {},
+                        embedded = true,
+                        onSwitchToGrid = {},
+                    )
+                }
+            }
+        }
+        rule.waitForIdle()
+        rule.onRoot().performKeyInput { pressKey(Key.I) }
+        rule.waitForIdle()
+        rule.onNodeWithText("Details").assertIsDisplayed()
+        rule.onNodeWithContentDescription("Grid view").assertIsDisplayed()
+        rule.dumpScreenshot("inspect-browse-details-panel")
     }
 
     // --- Inspect: grid mode (the overview-pick grid facet) ---

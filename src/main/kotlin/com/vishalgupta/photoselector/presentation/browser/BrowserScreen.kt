@@ -10,9 +10,11 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowForward
@@ -57,6 +59,7 @@ import com.vishalgupta.photoselector.presentation.designsystem.molecule.ErrorPla
 import com.vishalgupta.photoselector.presentation.designsystem.molecule.PillToast
 import com.vishalgupta.photoselector.presentation.designsystem.molecule.PillToastDefaults
 import com.vishalgupta.photoselector.presentation.designsystem.organism.BrowserCategoryHud
+import com.vishalgupta.photoselector.presentation.designsystem.organism.BrowserDetailsPanel
 import com.vishalgupta.photoselector.presentation.designsystem.organism.BrowserTopBar
 import com.vishalgupta.photoselector.presentation.designsystem.theme.AppTheme
 import kotlinx.coroutines.delay
@@ -133,6 +136,11 @@ fun BrowserScreen(
     // Open/closed state of the move-to-Trash confirmation; Cmd+Delete arms it.
     var confirmingDelete by remember { mutableStateOf(false) }
 
+    // The details panel is a deliberate latch: `I` toggles it and it persists open/closed across photo
+    // navigation for this browser session, resetting only when the browser leaves composition (this
+    // remember is discarded). It is NOT tied to the HUD's hover reveal.
+    var detailsOpen by remember { mutableStateOf(false) }
+
     // The HUD auto-hides; any handled keystroke (and, via HoverOverlay, mouse movement)
     // reveals it. Bumping this token restarts the hide timer.
     var revealHud by remember { mutableIntStateOf(0) }
@@ -204,6 +212,9 @@ fun BrowserScreen(
                         true
                     }
                     Key.G -> if (meta) false else { onBackToGrid(); true }
+                    // I latches the right-side details panel open/closed for the session (works both
+                    // standalone and embedded in Inspect). Not tied to the auto-hiding HUD.
+                    Key.I -> if (meta) false else { detailsOpen = !detailsOpen; true }
                     // Embedded in Inspect, `C` is inert (no nested Inspect), so fall through rather
                     // than silently swallow it — the legend hides the hint to match.
                     Key.C -> if (meta || embedded) false else { onCompare(); true }
@@ -241,6 +252,12 @@ fun BrowserScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(top = AppTheme.dimens.topBarHeight)
+                // Re-center the image + nav/HUD to the left of the details panel while it's open, so
+                // the panel never occludes the photo.
+                .then(
+                    if (detailsOpen) Modifier.padding(end = AppTheme.dimens.browserDetailsPanelWidth)
+                    else Modifier,
+                )
                 .onSizeChanged { size ->
                     val px = maxOf(size.width, size.height)
                     if (px > 0) viewportPx = px
@@ -335,6 +352,22 @@ fun BrowserScreen(
                 .padding(bottom = AppTheme.dimens.browserToastBottomInset),
         ) {
             displayedDeleteMessage?.let { PillToast(text = it, colors = PillToastDefaults.removedColors()) }
+        }
+
+        val panelPhoto = state.currentPhoto
+        if (detailsOpen && panelPhoto != null) {
+            BrowserDetailsPanel(
+                fileName = panelPhoto.fileName,
+                relativePath = panelPhoto.relativePath,
+                sizeBytes = panelPhoto.sizeBytes,
+                captureTimeEpochMs = state.captureMetadata?.takenAtEpochMs,
+                cameraId = state.captureMetadata?.cameraId,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = AppTheme.dimens.topBarHeight)
+                    .fillMaxHeight()
+                    .width(AppTheme.dimens.browserDetailsPanelWidth),
+            )
         }
 
         if (confirmingDelete) {

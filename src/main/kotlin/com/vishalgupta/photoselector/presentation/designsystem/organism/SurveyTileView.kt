@@ -3,7 +3,9 @@ package com.vishalgupta.photoselector.presentation.designsystem.organism
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -16,10 +18,14 @@ import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.layout.ContentScale
 import com.vishalgupta.photoselector.presentation.designsystem.atom.LoadingIndicator
+import com.vishalgupta.photoselector.presentation.designsystem.atom.TileSignal
+import com.vishalgupta.photoselector.presentation.designsystem.atom.TileSignalChip
 import com.vishalgupta.photoselector.presentation.designsystem.molecule.ComparePaneHeader
 import com.vishalgupta.photoselector.presentation.designsystem.molecule.ErrorPlaceholder
 import com.vishalgupta.photoselector.presentation.designsystem.theme.AppTheme
 import com.vishalgupta.photoselector.presentation.survey.SurveyTile
+import kotlinx.collections.immutable.ImmutableList
+import kotlinx.collections.immutable.persistentListOf
 
 /**
  * One cell of the Inspect overview grid: the photo fit (not cropped) into the cell, a
@@ -39,6 +45,9 @@ fun SurveyTileView(
     totalInScope: Int,
     onActivate: () -> Unit,
     modifier: Modifier = Modifier,
+    // Feature-agnostic bottom-center signal lane, matching PhotoThumbnail's. Empty in the shipped
+    // path; immutable so the tile stays strong-skippable.
+    signals: ImmutableList<TileSignal> = persistentListOf(),
 ) {
     Box(
         modifier
@@ -73,6 +82,18 @@ fun SurveyTileView(
                     .fillMaxWidth()
                     .padding(AppTheme.spacing.sm),
             )
+        }
+
+        if (signals.isNotEmpty()) {
+            Row(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(AppTheme.spacing.sm),
+                horizontalArrangement = Arrangement.spacedBy(AppTheme.spacing.xxs),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                signals.forEach { signal -> TileSignalChip(signal = signal) }
+            }
         }
     }
 }
