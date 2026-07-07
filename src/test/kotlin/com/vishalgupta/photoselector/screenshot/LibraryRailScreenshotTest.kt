@@ -185,6 +185,26 @@ class LibraryRailScreenshotTest {
         rule.dumpScreenshot("library-rail-xmp-sync-off")
     }
 
+    @Test fun `rail shows the smart RAW files row and its scoped grid`() {
+        // Eyeball build/screenshots/library-rail-smart-raw.png: under a "SMART" section label the
+        // "RAW files" row shows its auto/rule glyph and its resolved count (2) with NO slot digit and
+        // NO "⋯" menu; the row is highlighted as the active scope and the grid shows just its members.
+        val smartRaw = Category.smartRaw()
+        val cats = listOf(Category.favourites(), Category.rejects(), smartRaw, keepers, portfolio)
+        val members = memberships + (Category.SMART_RAW_ID to setOf(photos[0].id, photos[2].id))
+        renderShell(
+            GridUiState(
+                photos = listOf(photos[0], photos[2]),
+                groups = listOf(photos[0], photos[2]).map(PhotoGroup::Single),
+                groupingMode = GroupingMode.Off,
+                scope = CategoryScope.Category(Category.SMART_RAW_ID),
+                categories = cats,
+                memberships = members,
+            ),
+        )
+        rule.dumpScreenshot("library-rail-smart-raw")
+    }
+
     @Test fun `rail collapsed leaves the grid full-bleed`() {
         renderShell(
             GridUiState(

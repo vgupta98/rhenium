@@ -1,10 +1,18 @@
 package com.vishalgupta.photoselector.data.categories
 
+import com.vishalgupta.photoselector.data.format.RawDecoder
 import com.vishalgupta.photoselector.domain.model.Category
 import com.vishalgupta.photoselector.domain.model.CategoryId
+import com.vishalgupta.photoselector.domain.model.CategoryKind
 import com.vishalgupta.photoselector.domain.model.Photo
 import com.vishalgupta.photoselector.domain.model.PhotoId
+import com.vishalgupta.photoselector.domain.model.RawFilesResolver
 import com.vishalgupta.photoselector.domain.model.RootFolder
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.job
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
@@ -27,6 +35,16 @@ class JsonCategoriesRepositoryTest {
         ignoreUnknownKeys = true
     }
 
+    // "What is RAW" comes from the same set production uses (the RAW decoder's format), never a fork.
+    private val rawResolver = RawFilesResolver(RawDecoder.Companion.RawFormat.extensions)
+    // Unconfined so the launched rule pass runs inline during observe() — deterministic in-memory
+    // state; SupervisorJob so a test can join the (real-IO) prune write via [awaitResolution].
+    private val resolverScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+
+    /** Awaits any in-flight rule pass (incl. its off-thread prune write). */
+    private suspend fun awaitResolution() =
+        resolverScope.coroutineContext.job.children.toList().joinAll()
+
     private fun photo(relative: String, size: Long, mtime: Long) = Photo(
         id = PhotoId(relative),
         absolutePath = tmp.root.toPath().resolve(relative),
@@ -43,10 +61,15 @@ class JsonCategoriesRepositoryTest {
         val repo = JsonCategoriesRepository(
             json = json,
             scannedPhotos = { scanned },
+            ruleResolver = rawResolver,
+            scope = resolverScope,
             idGenerator = { CategoryId("cat-${counter++}") },
         )
         return repo to root
     }
+
+    private fun smartRawMembers(repo: JsonCategoriesRepository, root: RootFolder): Set<PhotoId> =
+        repo.observeMemberships(root).value[Category.SMART_RAW_ID].orEmpty()
 
     private fun writeCategoriesFile(root: RootFolder, content: String) =
         Files.writeString(root.categoriesFile, content)
@@ -62,9 +85,13 @@ class JsonCategoriesRepositoryTest {
         val (repo, root) = repo(listOf(photo("a.jpg", 1, 1)))
 
         val categories = repo.observeCategories(root).value
-        // Both built-ins exist, in canonical order, and both are flagged built-in.
-        assertEquals(listOf(Category.FAVOURITES_ID, Category.REJECTS_ID), categories.map { it.id })
-        assertTrue(categories.all { it.builtIn })
+        // Both built-ins plus the always-seeded "RAW files" smart category, in canonical order.
+        assertEquals(
+            listOf(Category.FAVOURITES_ID, Category.REJECTS_ID, Category.SMART_RAW_ID),
+            categories.map { it.id },
+        )
+        assertTrue(categories.filter { it.builtIn }.all { it.id in Category.BUILT_IN_IDS })
+        assertEquals(CategoryKind.SMART, categories.first { it.id == Category.SMART_RAW_ID }.kind)
         assertEquals(emptySet<PhotoId>(), favouriteIds(repo, root))
     }
 
@@ -89,7 +116,7 @@ class JsonCategoriesRepositoryTest {
         // A fresh repository reading the same file sees the persisted category + membership.
         val (reopened, _) = repo(listOf(photo("a.jpg", 100, 5), photo("b.jpg", 200, 6)))
         val categories = reopened.observeCategories(root).value
-        assertEquals(listOf("Favourites", "Rejects", "Selects"), categories.map { it.name })
+        assertEquals(listOf("Favourites", "Rejects", "RAW files", "Selects"), categories.map { it.name })
         assertEquals(
             setOf(PhotoId("b.jpg")),
             reopened.observeMemberships(root).value[selects],
@@ -181,7 +208,10 @@ class JsonCategoriesRepositoryTest {
         writeFavouritesFile(root, """{"favourites":["a.jpg"]}""")
 
         val categories = repo.observeCategories(root).value
-        assertEquals(listOf(Category.FAVOURITES_ID, Category.REJECTS_ID), categories.map { it.id })
+        assertEquals(
+            listOf(Category.FAVOURITES_ID, Category.REJECTS_ID, Category.SMART_RAW_ID),
+            categories.map { it.id },
+        )
         assertEquals(setOf(PhotoId("a.jpg")), favouriteIds(repo, root))
         assertEquals(emptySet<PhotoId>(), repo.observeMemberships(root).value[Category.REJECTS_ID].orEmpty())
     }
@@ -196,7 +226,7 @@ class JsonCategoriesRepositoryTest {
 
         repo.delete(root, id)
         assertEquals(
-            listOf(Category.FAVOURITES_ID, Category.REJECTS_ID),
+            listOf(Category.FAVOURITES_ID, Category.REJECTS_ID, Category.SMART_RAW_ID),
             repo.observeCategories(root).value.map { it.id },
         )
     }
@@ -244,7 +274,12 @@ class JsonCategoriesRepositoryTest {
         // scan must not cache the root as bound, or persisted memberships would vanish.
         var scanned = emptyList<Photo>()
         val root = RootFolder(tmp.root.toPath())
-        val repo = JsonCategoriesRepository(json, scannedPhotos = { scanned })
+        val repo = JsonCategoriesRepository(
+            json,
+            scannedPhotos = { scanned },
+            ruleResolver = rawResolver,
+            scope = resolverScope,
+        )
         writeCategoriesFile(
             root,
             """{"version":2,"categories":[{"id":"favourites","name":"Favourites","builtIn":true,"photos":[{"path":"a.jpg","size":100,"mtimeMs":5}]}]}""",
@@ -271,5 +306,104 @@ class JsonCategoriesRepositoryTest {
         repo.toggleMembership(root, Category.FAVOURITES_ID, PhotoId("a.jpg"))
 
         assertEquals("unreadable file must be left untouched", corrupt, Files.readString(root.categoriesFile))
+    }
+
+    // --- Smart categories (RAW files) ---
+
+    @Test
+    fun smartRaw_resolvesMembershipFromFileExtension() = runTest {
+        val (repo, root) = repo(
+            listOf(photo("a.jpg", 1, 1), photo("b.arw", 2, 2), photo("c.CR2", 3, 3), photo("d.png", 4, 4)),
+        )
+
+        // Rule-resolved: the two RAW files (case-insensitive), never the JPEG/PNG. No manual overrides.
+        assertEquals(setOf(PhotoId("b.arw"), PhotoId("c.CR2")), smartRawMembers(repo, root))
+    }
+
+    @Test
+    fun smartRaw_toggleOffARuleMatch_writesAnExcludeAndDropsIt() = runTest {
+        val (repo, root) = repo(listOf(photo("b.arw", 2, 2), photo("c.cr2", 3, 3)))
+        assertEquals(setOf(PhotoId("b.arw"), PhotoId("c.cr2")), smartRawMembers(repo, root))
+
+        // (i) Toggling OFF a rule-matched photo writes a manual EXCLUDE (never a pin) and it leaves.
+        val nowMember = repo.toggleMembership(root, Category.SMART_RAW_ID, PhotoId("b.arw"))
+        assertFalse(nowMember)
+        assertEquals(setOf(PhotoId("c.cr2")), smartRawMembers(repo, root))
+
+        // Persisted as an exclude, not a pin.
+        val (reopened, _) = repo(listOf(photo("b.arw", 2, 2), photo("c.cr2", 3, 3)))
+        assertEquals(setOf(PhotoId("c.cr2")), smartRawMembers(reopened, root))
+
+        // (iii) Re-toggling ON removes the exclude, returning to the rule's natural state.
+        assertTrue(repo.toggleMembership(root, Category.SMART_RAW_ID, PhotoId("b.arw")))
+        assertEquals(setOf(PhotoId("b.arw"), PhotoId("c.cr2")), smartRawMembers(repo, root))
+    }
+
+    @Test
+    fun smartRaw_toggleOnANonMatch_writesAPinAndAddsIt() = runTest {
+        val (repo, root) = repo(listOf(photo("a.jpg", 1, 1), photo("b.arw", 2, 2)))
+
+        // (ii) Toggling ON a non-matched photo writes a manual PIN and it joins.
+        val nowMember = repo.toggleMembership(root, Category.SMART_RAW_ID, PhotoId("a.jpg"))
+        assertTrue(nowMember)
+        assertEquals(setOf(PhotoId("a.jpg"), PhotoId("b.arw")), smartRawMembers(repo, root))
+
+        // Persisted as a pin.
+        val (reopened, _) = repo(listOf(photo("a.jpg", 1, 1), photo("b.arw", 2, 2)))
+        assertEquals(setOf(PhotoId("a.jpg"), PhotoId("b.arw")), smartRawMembers(reopened, root))
+
+        // (iii) Re-toggling OFF removes the pin, back to rule-only.
+        assertFalse(repo.toggleMembership(root, Category.SMART_RAW_ID, PhotoId("a.jpg")))
+        assertEquals(setOf(PhotoId("b.arw")), smartRawMembers(repo, root))
+    }
+
+    @Test
+    fun smartRaw_combinesRuleMatchesWithPinsMinusExcludes() = runTest {
+        val (repo, root) = repo(
+            listOf(photo("a.jpg", 1, 1), photo("b.arw", 2, 2), photo("c.nef", 3, 3)),
+        )
+
+        // Pin a non-match (a.jpg) and exclude a match (c.nef): members = (matches ∪ pins) \ excludes.
+        repo.toggleMembership(root, Category.SMART_RAW_ID, PhotoId("a.jpg")) // pin
+        repo.toggleMembership(root, Category.SMART_RAW_ID, PhotoId("c.nef")) // exclude
+        assertEquals(setOf(PhotoId("a.jpg"), PhotoId("b.arw")), smartRawMembers(repo, root))
+    }
+
+    @Test
+    fun smartRaw_prunesRedundantOverridesOnRescan() = runTest {
+        // A stale PIN (rule now matches it) and a stale EXCLUDE (rule no longer matches it) on disk
+        // must both be pruned on load so they can't resurrect a wrong membership on a later rescan.
+        val (repo, root) = repo(listOf(photo("x.arw", 10, 10), photo("y.jpg", 20, 20)))
+        writeCategoriesFile(
+            root,
+            """
+            {
+              "version": 2,
+              "categories": [
+                { "id": "smart-raw", "name": "RAW files", "builtIn": false,
+                  "rule": { "type": "raw-files" },
+                  "photos":   [ { "path": "x.arw", "size": 10, "mtimeMs": 10 } ],
+                  "excluded": [ { "path": "y.jpg", "size": 20, "mtimeMs": 20 } ] }
+              ]
+            }
+            """.trimIndent(),
+        )
+
+        // In-memory membership is already correct: x.arw via the rule, y.jpg not RAW so absent.
+        assertEquals(setOf(PhotoId("x.arw")), smartRawMembers(repo, root))
+
+        // The prune pass rewrites the file without the now-redundant pin/exclude.
+        awaitResolution()
+        val rewritten = Files.readString(root.categoriesFile)
+        assertFalse("redundant pin must be pruned", rewritten.contains("x.arw"))
+        assertFalse("redundant exclude must be pruned", rewritten.contains("y.jpg"))
+    }
+
+    @Test
+    fun smartRaw_cannotBeRenamedOrDeleted() = runTest {
+        val (repo, root) = repo(listOf(photo("b.arw", 2, 2)))
+
+        assertFailsWith<IllegalArgumentException> { repo.rename(root, Category.SMART_RAW_ID, "Nope") }
+        assertFailsWith<IllegalArgumentException> { repo.delete(root, Category.SMART_RAW_ID) }
     }
 }

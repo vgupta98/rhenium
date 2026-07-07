@@ -24,9 +24,13 @@ architecture, single Gradle module: `domain` (pure) → `data` (impls) →
 
 ## domain/ — pure, no framework deps
 
-- `model/` — entities: `Photo`, `PhotoId`, `RootFolder`, `Category`,
-  `CategoryId`, `PhotoGroup` (`Single | Burst`; `Burst.keyIndex` = representative
-  frame), `DecodedImage`, `ScanProgress`.
+- `model/` — entities: `Photo`, `PhotoId`, `RootFolder`, `Category` (now carries a
+  `kind: CategoryKind` (`MANUAL | SMART`, orthogonal to `builtIn`) and a nullable
+  `rule: CategoryRule`; seeds `smartRaw()`/`smartSeeds`), `CategoryId`, `CategoryRule`
+  (`CategoryRule.RawFiles` + the `CategoryRuleResolver` seam and its pure
+  `RawFilesResolver` — extension classification over an injected RAW-extension set),
+  `PhotoGroup` (`Single | Burst`; `Burst.keyIndex` = representative frame),
+  `DecodedImage`, `ScanProgress`.
 - `repository/` — interfaces: `PhotoRepository`, `CategoriesRepository`,
   `BrowsePositionRepository`, `AppPreferencesRepository`, `PhotoExporter`, `PhotoTrash`.
 - `usecase/` — `ScanRootFolderUseCase`, `CopyPhotosToFolderUseCase`,
@@ -48,7 +52,11 @@ architecture, single Gradle module: `domain` (pure) → `data` (impls) →
 - `filesystem/` — `FileSystemPhotoRepository` (scans a root into `Photo`s),
   `PathFilters` (include/exclude rules).
 - `categories/` — `JsonCategoriesRepository` (membership persistence + v2
-  migration), `CategoriesFile` (on-disk schema), `MembershipResolver`.
+  migration; also the one place stored + rule-computed membership merge — seeds the
+  `smart-raw` category, resolves smart rules off-thread on an injected scope, folds
+  `(ruleMatches ∪ pins) \ excludes`, and prunes redundant overrides on rescan),
+  `CategoriesFile` (on-disk schema; `CategoryDto` gained additive `rule` +
+  `excluded`, still v2 via `ignoreUnknownKeys`), `MembershipResolver`.
 - `browse/` — `JsonBrowsePositionRepository` (persists last scroll position).
 - `image/` — decode + cache: `SkikoImageLoader`, `ImageLoader`/`ImageCache`,
   `DiskThumbnailCache`.
