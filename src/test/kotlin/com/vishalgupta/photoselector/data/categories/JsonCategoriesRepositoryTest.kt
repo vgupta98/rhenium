@@ -400,6 +400,46 @@ class JsonCategoriesRepositoryTest {
     }
 
     @Test
+    fun unknownRuleType_treatedAsManualAndPreservedAcrossRewrite() = runTest {
+        // A rule type this build doesn't understand (a newer file after a downgrade, or a hand-edit)
+        // must be treated as manual — its stored `photos` are the membership — and a later rewrite must
+        // NOT silently wipe its `rule`/`excluded`/`photos`.
+        val (repo, root) = repo(listOf(photo("a.jpg", 1, 1), photo("b.jpg", 2, 2)))
+        writeCategoriesFile(
+            root,
+            """
+            {
+              "version": 2,
+              "categories": [
+                { "id": "future", "name": "Future", "builtIn": false,
+                  "rule": { "type": "people-ai" },
+                  "photos":   [ { "path": "a.jpg", "size": 1, "mtimeMs": 1 } ],
+                  "excluded": [ { "path": "b.jpg", "size": 2, "mtimeMs": 2 } ] }
+              ]
+            }
+            """.trimIndent(),
+        )
+
+        // Treated as manual: membership is exactly the stored photos, no rule interpretation.
+        assertEquals(setOf(PhotoId("a.jpg")), repo.observeMemberships(root).value[CategoryId("future")])
+        assertEquals(
+            CategoryKind.MANUAL,
+            repo.observeCategories(root).value.first { it.id == CategoryId("future") }.kind,
+        )
+
+        // A mutation elsewhere rewrites the file; the unknown rule + excluded + photos all survive.
+        repo.toggleMembership(root, Category.FAVOURITES_ID, PhotoId("a.jpg"))
+        val written = Files.readString(root.categoriesFile)
+        assertTrue("unknown rule type preserved", written.contains("people-ai"))
+        assertTrue("photos preserved", written.contains("\"a.jpg\""))
+        assertTrue("excluded preserved", written.contains("\"b.jpg\""))
+
+        // Reopening reads it back identically (still manual, same membership).
+        val (reopened, _) = repo(listOf(photo("a.jpg", 1, 1), photo("b.jpg", 2, 2)))
+        assertEquals(setOf(PhotoId("a.jpg")), reopened.observeMemberships(root).value[CategoryId("future")])
+    }
+
+    @Test
     fun smartRaw_cannotBeRenamedOrDeleted() = runTest {
         val (repo, root) = repo(listOf(photo("b.arw", 2, 2)))
 

@@ -73,6 +73,10 @@ class JsonCategoriesRepository(
     private var excludes: Map<CategoryId, Set<PhotoId>> = emptyMap()
     private var ruleMatches: Map<CategoryId, Set<PhotoId>> = emptyMap()
 
+    // Categories carrying a rule this build doesn't understand: treated as manual, but their raw
+    // `rule`/`excluded` are carried through a rewrite verbatim so a newer build can still use them.
+    private var preservedUnknownRuleById: Map<CategoryId, CategoryDto> = emptyMap()
+
     // Handle on the in-flight rule pass, so a rebind / clearContext can cancel a stale one.
     private var resolveJob: Job? = null
 
@@ -208,6 +212,7 @@ class JsonCategoriesRepository(
             pins = emptyMap()
             excludes = emptyMap()
             ruleMatches = emptyMap()
+            preservedUnknownRuleById = emptyMap()
             readOnly.value = false
         }
     }
@@ -273,18 +278,27 @@ class JsonCategoriesRepository(
         val manual = LinkedHashMap<CategoryId, Set<PhotoId>>()
         val loadedPins = LinkedHashMap<CategoryId, Set<PhotoId>>()
         val loadedExcludes = LinkedHashMap<CategoryId, Set<PhotoId>>()
+        val unknownRule = LinkedHashMap<CategoryId, CategoryDto>()
         for (dto in loaded) {
             val id = CategoryId(dto.id)
-            if (dto.rule != null) {
+            // Route on the *resolved* kind (matching toCategory()/membersOf()/isSmart()), not the raw
+            // `rule != null`: an unknown/future rule type resolves to null and must fall to the manual
+            // path, or bind and the rest of the model would disagree about the category's kind.
+            if (dto.rule?.toDomain() != null) {
                 loadedPins[id] = MembershipResolver.resolve(dto.photos, scanned)
                 loadedExcludes[id] = MembershipResolver.resolve(dto.excluded, scanned)
             } else {
                 manual[id] = MembershipResolver.resolve(dto.photos, scanned)
+                // A dto that carries a rule this build doesn't understand is treated as manual, but its
+                // `rule`/`excluded` must survive a rewrite untouched (a newer build can still use them) —
+                // stash the raw dto so writeToDisk can carry those fields through.
+                if (dto.rule != null) unknownRule[id] = dto
             }
         }
         manualMembers = manual
         pins = loadedPins
         excludes = loadedExcludes
+        preservedUnknownRuleById = unknownRule
         // Rule matches are computed off-thread below; until then smart categories show pins-only.
         ruleMatches = emptyMap()
         membershipsFlow.value = resolvedMemberships()
@@ -411,12 +425,20 @@ class JsonCategoriesRepository(
                     excluded = entriesFor(excludes[category.id].orEmpty()),
                     rule = category.rule?.toDto(),
                 )
-                CategoryKind.MANUAL -> CategoryDto(
-                    id = category.id.value,
-                    name = category.name,
-                    builtIn = category.builtIn,
-                    photos = entriesFor(manualMembers[category.id].orEmpty()),
-                )
+                CategoryKind.MANUAL -> {
+                    // Normally rule/excluded stay empty; for a category whose rule this build doesn't
+                    // understand, carry its raw rule + excluded through untouched (manual edits still
+                    // land in photos) so a downgrade/hand-edit can't silently wipe them.
+                    val carried = preservedUnknownRuleById[category.id]
+                    CategoryDto(
+                        id = category.id.value,
+                        name = category.name,
+                        builtIn = category.builtIn,
+                        photos = entriesFor(manualMembers[category.id].orEmpty()),
+                        excluded = carried?.excluded.orEmpty(),
+                        rule = carried?.rule,
+                    )
+                }
             }
         }
         val bytes = CategoriesFile.encode(json, dtos)

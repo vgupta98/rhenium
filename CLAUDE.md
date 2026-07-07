@@ -122,12 +122,29 @@ Clean architecture, single Gradle module, package
   - Re-anchor focus by **photo identity** on every reshape
     (`GridViewModel.refocus`), never a bare index — a regroup renumbers tiles
     under the cursor, so an index silently slides onto a different burst.
-- Photos live in N flat per-root categories; **Favourites** is the built-in one
-  (fixed id `favourites`, not renamable/deletable). Memberships persist to
-  `<root>/.photo-selector-categories.json` (v2; a legacy
-  `.photo-selector-favourites.json` migrates in on first read, renamed `.bak`).
-  `CategoriesRepository` exposes one `observeMemberships` map flow — scope and
-  `slice()` stay predicate-blind for a future smart category.
+- Photos live in N flat per-root categories, each with an orthogonal
+  `kind: CategoryKind` (`MANUAL | SMART`, **not** overloaded onto `builtIn`).
+  **Favourites** and **Rejects** are the built-in manual ones (fixed ids, not
+  renamable/deletable); custom buckets are manual; a **smart** category self-fills
+  from a pure `CategoryRule` (domain) resolved by a `CategoryRuleResolver` seam,
+  with manual **pins/excludes** layered on top. The always-provided `smart-raw`
+  ("RAW files", `RawFilesResolver` classifying by extension over the format layer's
+  RAW set) is the first, seeded per root like the built-ins (also
+  un-renamable/deletable; a delete would just reseed). Memberships persist to
+  `<root>/.photo-selector-categories.json` — still **v2**: `rule` + `excluded` are
+  additive `CategoryDto` fields decoded through `ignoreUnknownKeys` (no version
+  bump), a smart category storing rule + pins (`photos`) + excludes, never a
+  resolved snapshot; a legacy `.photo-selector-favourites.json` still migrates in,
+  renamed `.bak`. `JsonCategoriesRepository` is the one place stored + rule-computed
+  membership merge: it resolves rules **off-thread on an injected scope** (decoupled
+  like the Similarity pass), folds `(ruleMatches ∪ pins) \ excludes`, stores
+  **deviations only** (never a pin the rule already matches, nor an exclude it
+  doesn't) and **prunes now-redundant overrides on rescan**. An unknown/future rule
+  type resolves to null and is treated as manual — its raw `rule`/`excluded` are
+  carried through a rewrite untouched, never wiped. `CategoriesRepository` still
+  exposes one predicate-blind `observeMemberships` map flow; `CategoryScope` /
+  `slice()` stay **closed and predicate-blind** — a smart category rides
+  `Category(id)`, never its own scope case.
 - State plumbing: `StateFlow` for screen state, `SharedFlow` / `Channel`
   for one-shot events (toasts etc).
 
