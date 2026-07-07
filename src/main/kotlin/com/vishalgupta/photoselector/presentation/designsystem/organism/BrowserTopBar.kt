@@ -3,6 +3,7 @@ package com.vishalgupta.photoselector.presentation.designsystem.organism
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.GridView
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -34,6 +35,11 @@ fun BrowserTopBar(
     // The "grid view" toggle back to Inspect's overview. Shown (when [embedded]) only if there is a
     // grid to return to — a browse-only set (past the grid cap) leaves it null.
     onSwitchToGrid: (() -> Unit)? = null,
+    // The rightmost trailing action: a toggle for the details panel — the second door to the same
+    // state the `I` shortcut drives. Reflects [detailsOpen] with an accent (selected) tint. Present in
+    // both plain and embedded browse.
+    detailsOpen: Boolean = false,
+    onToggleDetails: () -> Unit = {},
 ) {
     TopBarScaffold(modifier, containerColor = AppTheme.colors.topBarScrim) {
         IconButton(onClick = onBack) {
@@ -77,6 +83,15 @@ fun BrowserTopBar(
                     contentColor = Color.White.copy(alpha = 0.7f),
                 )
             }
+        }
+        // The details-panel toggle, rightmost in both modes. Accent tint when open so it reads as an
+        // engaged toggle; plain white when closed, matching the bar's other flat icons.
+        IconButton(onClick = onToggleDetails) {
+            Icon(
+                Icons.Outlined.Info,
+                contentDescription = "Details (I)",
+                tint = if (detailsOpen) AppTheme.colors.selectionRing else Color.White,
+            )
         }
     }
 }

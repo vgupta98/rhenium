@@ -740,11 +740,10 @@ class ScreenSplitScreenshotTest {
         orientation = 1,
     )
 
-    @OptIn(ExperimentalTestApi::class)
     @Test
-    fun browser_detailsPanel() {
-        // `I` latches the right-side details panel open; the image re-centers to its left. The panel
-        // shows file facts plus the EXIF capture time/camera and the "AI insights - Coming soon" slot.
+    fun browser_detailsButtonClosed() {
+        // Default (panel-closed) chrome: the top-right Details toggle renders in its plain (white)
+        // state alongside the rest of the bar. Additive over the existing browser screenshots.
         rule.setContent {
             AppTheme {
                 Surface(Modifier.size(900.dp, 600.dp)) {
@@ -771,7 +770,44 @@ class ScreenSplitScreenshotTest {
             }
         }
         rule.waitForIdle()
-        rule.onRoot().performKeyInput { pressKey(Key.I) }
+        rule.onNodeWithContentDescription("Details (I)").assertIsDisplayed()
+        rule.onNodeWithText("Details").assertDoesNotExist()
+        rule.dumpScreenshot("browser-details-button-closed")
+    }
+
+    @Test
+    fun browser_detailsPanel() {
+        // Clicking the top-right Details toggle opens the same panel the `I` shortcut drives (the two
+        // doors to one state); the button switches to its accent (active) tint and the image re-centers
+        // to its left. The panel shows file facts plus the EXIF capture time/camera and the
+        // "AI insights - Coming soon" slot.
+        rule.setContent {
+            AppTheme {
+                Surface(Modifier.size(900.dp, 600.dp)) {
+                    BrowserScreen(
+                        state = BrowserUiState(
+                            photos = testPhotos,
+                            currentIndex = 0,
+                            currentPhoto = testPhotos[0],
+                            currentBitmap = ImageBitmap(200, 150),
+                            isLoadingBitmap = false,
+                            isCurrentFavourite = false,
+                            readOnly = false,
+                            categories = categories,
+                            captureMetadata = captureMetadata,
+                        ),
+                        toast = null,
+                        onPrevious = {},
+                        onNext = {},
+                        onToggleCategory = {},
+                        onViewportSizeChanged = {},
+                        onBackToGrid = {},
+                    )
+                }
+            }
+        }
+        rule.waitForIdle()
+        rule.onNodeWithContentDescription("Details (I)").performClick()
         rule.waitForIdle()
         rule.onNodeWithText("Details").assertIsDisplayed()
         rule.onNodeWithText("AI insights").assertIsDisplayed()
@@ -812,6 +848,9 @@ class ScreenSplitScreenshotTest {
             }
         }
         rule.waitForIdle()
+        // The toggle button also renders embedded; here the `I` shortcut opens the panel to prove the
+        // keyboard door still works in Inspect browse.
+        rule.onNodeWithContentDescription("Details (I)").assertIsDisplayed()
         rule.onRoot().performKeyInput { pressKey(Key.I) }
         rule.waitForIdle()
         rule.onNodeWithText("Details").assertIsDisplayed()

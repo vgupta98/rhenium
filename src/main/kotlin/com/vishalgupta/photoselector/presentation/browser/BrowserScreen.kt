@@ -240,6 +240,8 @@ fun BrowserScreen(
             onShowInAllPhotos = onShowInAllPhotos,
             embedded = embedded,
             onSwitchToGrid = onSwitchToGrid,
+            detailsOpen = detailsOpen,
+            onToggleDetails = { detailsOpen = !detailsOpen },
             modifier = Modifier.fillMaxWidth(),
         )
 
