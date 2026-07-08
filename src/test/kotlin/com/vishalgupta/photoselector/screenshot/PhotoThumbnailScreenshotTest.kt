@@ -1,6 +1,10 @@
 package com.vishalgupta.photoselector.screenshot
 
 import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
@@ -11,8 +15,13 @@ import androidx.compose.ui.unit.dp
 import com.vishalgupta.photoselector.data.image.ImageLoader
 import com.vishalgupta.photoselector.domain.model.Photo
 import com.vishalgupta.photoselector.domain.model.PhotoId
+import com.vishalgupta.photoselector.presentation.designsystem.atom.TileSignal
+import com.vishalgupta.photoselector.presentation.designsystem.atom.TileSignalTint
 import com.vishalgupta.photoselector.presentation.designsystem.organism.PhotoThumbnail
+import com.vishalgupta.photoselector.presentation.designsystem.organism.SurveyTileView
 import com.vishalgupta.photoselector.presentation.designsystem.theme.AppTheme
+import com.vishalgupta.photoselector.presentation.survey.SurveyTile
+import kotlinx.collections.immutable.persistentListOf
 import kotlinx.coroutines.CoroutineScope
 import org.junit.Rule
 import org.junit.Test
@@ -68,5 +77,76 @@ class PhotoThumbnailScreenshotTest {
         // rather than silently dumping a spinner PNG.
         rule.onNodeWithText("Can't open this photo.").assertIsDisplayed()
         rule.dumpScreenshot("grid-tile-decode-failed")
+    }
+
+    // A loader that settles to a solid bitmap, so the tile reads as a loaded photo the signal lane
+    // overlays (rather than the error placeholder above).
+    private val loadedLoader = object : ImageLoader {
+        override suspend fun load(photo: Photo, viewportLongEdgePx: Int): ImageBitmap = ImageBitmap(240, 240)
+        override fun prefetch(photos: List<Photo>, viewportLongEdgePx: Int, scope: CoroutineScope) {}
+        override fun evictAll() {}
+        override fun pin(id: PhotoId) {}
+        override fun unpinAllExcept(id: PhotoId?) {}
+    }
+
+    // Two demo signals covering a tint role plus a plain neutral one — the surface future AI signals
+    // populate. Only tests inject these; production call sites pass an empty lane.
+    private val demoSignals = persistentListOf(
+        TileSignal(icon = Icons.Filled.Visibility, label = "Sharp", tint = TileSignalTint.Positive),
+        TileSignal(icon = Icons.Filled.Warning, contentDescription = "Closed eyes", tint = TileSignalTint.Caution),
+    )
+
+    @Test fun `grid tile renders the bottom-center signal lane above the other cues`() {
+        // The lane must sit centered along the bottom edge, above the last-viewed underline and clear
+        // of the top star / top-start category badge. Eyeball `grid-tile-signal-lane.png`.
+        rule.setContent {
+            AppTheme {
+                Surface(Modifier.size(240.dp)) {
+                    PhotoThumbnail(
+                        photo = photo,
+                        loader = loadedLoader,
+                        isMarked = true,
+                        isFocused = false,
+                        isLastViewed = true,
+                        categoryBadges = persistentListOf(1),
+                        signals = demoSignals,
+                        onClick = {},
+                        modifier = Modifier.size(240.dp),
+                    )
+                }
+            }
+        }
+        rule.waitForIdle()
+        rule.onNodeWithText("Sharp").assertIsDisplayed()
+        rule.dumpScreenshot("grid-tile-signal-lane")
+    }
+
+    @Test fun `survey tile renders the same bottom-center signal lane`() {
+        // The Inspect overview tile shares the lane. Eyeball `survey-tile-signal-lane.png`.
+        val tile = SurveyTile(
+            index = 0,
+            photo = photo,
+            bitmap = ImageBitmap(240, 240),
+            isLoading = false,
+            isFavourite = true,
+            memberships = emptySet(),
+        )
+        rule.setContent {
+            AppTheme {
+                Surface(Modifier.size(320.dp)) {
+                    SurveyTileView(
+                        tile = tile,
+                        isActive = true,
+                        totalInScope = 4,
+                        onActivate = {},
+                        signals = demoSignals,
+                        modifier = Modifier.size(320.dp),
+                    )
+                }
+            }
+        }
+        rule.waitForIdle()
+        rule.onNodeWithText("Sharp").assertIsDisplayed()
+        rule.dumpScreenshot("survey-tile-signal-lane")
     }
 }

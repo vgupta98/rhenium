@@ -48,6 +48,10 @@ data class Dimens(
     // Max width of a centered supporting-copy line (the root picker's guidance/count text), so the
     // prose wraps to a comfortable measure rather than stretching across a wide window.
     val supportingTextMaxWidth: Dp = 360.dp,
+    // Width of the browser's right-anchored details panel (file/EXIF facts + AI-insights slot). Wide
+    // enough for a filename and a capture-time line without truncating; the image re-centers by this
+    // much while the panel is open so it isn't occluded.
+    val browserDetailsPanelWidth: Dp = 320.dp,
 )
 
 val LocalDimens = staticCompositionLocalOf { Dimens() }

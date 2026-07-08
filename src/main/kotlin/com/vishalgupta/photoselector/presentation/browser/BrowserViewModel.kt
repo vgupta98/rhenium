@@ -2,6 +2,8 @@ package com.vishalgupta.photoselector.presentation.browser
 
 import androidx.compose.ui.graphics.ImageBitmap
 import com.vishalgupta.photoselector.data.image.ImageLoader
+import com.vishalgupta.photoselector.domain.grouping.CaptureMetadata
+import com.vishalgupta.photoselector.domain.grouping.CaptureMetadataSource
 import com.vishalgupta.photoselector.domain.model.Category
 import com.vishalgupta.photoselector.domain.model.CategoryId
 import com.vishalgupta.photoselector.domain.model.Photo
@@ -29,6 +31,7 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.swing.Swing
+import kotlinx.coroutines.withContext
 
 data class BrowserUiState(
     val photos: List<Photo>,
@@ -42,6 +45,12 @@ data class BrowserUiState(
     val categories: List<Category> = emptyList(),
     /** Which categories the current photo belongs to — which HUD chips are lit. */
     val currentMemberships: Set<CategoryId> = emptySet(),
+    /**
+     * Capture facts (time + camera) for the current photo, read lazily off-thread through the shared
+     * memoized [CaptureMetadataSource]; null until loaded (or when nothing is readable). Feeds the
+     * details panel only.
+     */
+    val captureMetadata: CaptureMetadata? = null,
 ) {
     companion object {
         fun initial(photos: List<Photo>) = BrowserUiState(
@@ -64,6 +73,7 @@ class BrowserViewModel(
     private val categories: CategoriesRepository,
     private val moveToTrash: MovePhotosToTrashUseCase,
     private val imageLoader: ImageLoader,
+    private val captureMetadataSource: CaptureMetadataSource,
     private val isReadOnly: StateFlow<Boolean>,
     parentJob: Job? = null,
     dispatcher: CoroutineDispatcher = Dispatchers.Swing,
@@ -109,6 +119,7 @@ class BrowserViewModel(
     val deleteEvents: Flow<String> = _deleteEvents.receiveAsFlow()
 
     private var loadJob: Job? = null
+    private var metadataJob: Job? = null
     private var positionSaveJob: Job? = null
     private var pendingSavePosition: BrowsePosition? = null
     private var viewportLongEdgePx: Int = 1600
@@ -157,12 +168,14 @@ class BrowserViewModel(
                 isLoadingBitmap = true,
                 isCurrentFavourite = photo.id in favourites(),
                 currentMemberships = membershipsOf(photo),
+                captureMetadata = null,
             )
         }
         scheduleSavePosition()
         imageLoader.unpinAllExcept(photo.id)
         imageLoader.pin(photo.id)
         loadCurrent()
+        loadCaptureMetadata()
         prefetchAround()
     }
 
@@ -244,6 +257,7 @@ class BrowserViewModel(
                         isLoadingBitmap = false,
                         isCurrentFavourite = false,
                         currentMemberships = emptySet(),
+                        captureMetadata = null,
                     )
                 }
             } else {
@@ -258,11 +272,13 @@ class BrowserViewModel(
                         isLoadingBitmap = true,
                         isCurrentFavourite = newPhoto.id in favourites(),
                         currentMemberships = membershipsOf(newPhoto),
+                        captureMetadata = null,
                     )
                 }
                 imageLoader.unpinAllExcept(newPhoto.id)
                 imageLoader.pin(newPhoto.id)
                 loadCurrent()
+                loadCaptureMetadata()
                 prefetchAround()
                 scheduleSavePosition()
             }
@@ -285,6 +301,22 @@ class BrowserViewModel(
         }
     }
 
+    /**
+     * Reads the current photo's capture facts off the main thread (the source itself is memoized, so a
+     * revisit is a map lookup) and drops them into state for the details panel. Guarded by the photo id
+     * on write, so a fast page-through never lands a stale read on the wrong photo.
+     */
+    private fun loadCaptureMetadata() {
+        metadataJob?.cancel()
+        val photo = _state.value.currentPhoto ?: return
+        metadataJob = scope.launch {
+            val meta = withContext(Dispatchers.IO) { captureMetadataSource.metadataFor(photo) }
+            _state.update {
+                if (it.currentPhoto?.id == photo.id) it.copy(captureMetadata = meta) else it
+            }
+        }
+    }
+
     private fun prefetchAround() {
         if (photos.isEmpty()) return
         val idx = _state.value.currentIndex
@@ -301,6 +333,10 @@ class BrowserViewModel(
         if (_state.value.currentBitmap == null && _state.value.currentPhoto != null) {
             loadCurrent()
             prefetchAround()
+        }
+        // Details-panel facts for the initial photo; cheap + memoized, guarded by id on write.
+        if (_state.value.captureMetadata == null && _state.value.currentPhoto != null) {
+            loadCaptureMetadata()
         }
     }
 

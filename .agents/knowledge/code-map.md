@@ -105,7 +105,10 @@ architecture, single Gradle module: `domain` (pure) → `data` (impls) →
   input→intent mapping is unit-testable; layout/anchor-coupled branches arrive as
   callbacks).
 - `browser/` — `BrowserScreen` + `…ViewModel`, `ZoomableImage`, `ZoomState`.
-  Reused inside Inspect's browse mode (`embedded`, `onSwitchToGrid`).
+  Reused inside Inspect's browse mode (`embedded`, `onSwitchToGrid`). The VM reads
+  the current photo's `captureMetadata` off-thread via the memoized
+  `CaptureMetadataSource` (a constructor dep) to feed the `I`-latched
+  `BrowserDetailsPanel`.
 - `inspect/` — `InspectScreen` + `InspectViewModel`: one fixed photo set viewed
   as an overview grid or full-screen browse, behind one toggle. Reuses the
   `survey/` and `browser/` view models as its two facets.
@@ -130,7 +133,10 @@ architecture, single Gradle module: `domain` (pure) → `data` (impls) →
 - `theme/` — tokens: `AppColors`/`Spacing`/`Dimens` read via `AppTheme.*` (those
   three only); `AppTypography`/`AppShapes` go via `MaterialTheme`. Files:
   `Color`, `Spacing`, `Dimens`, `Type`, `Shape`.
-- `atom/` — `Buttons`, `FavouriteStar`, `LoadingIndicator`.
+- `atom/` — `Buttons`, `FavouriteStar`, `RejectFlag`, `LoadingIndicator`,
+  `TileSignal` (the shared overlay-chrome chip `TileSignalChip` that the tile's
+  burst/review/category badges all build on, plus the feature-agnostic
+  `TileSignal` model + tint role that a tile's bottom-center signal lane renders).
 - `molecule/` — incl. `GroupingModeToggle` (lens segments + hover tooltips; the
   Similar segment carries a determinate ring while the background pass runs),
   `GroupingProgressBanner` (cold-pass framing), `BackgroundGroupingChip` (the
@@ -148,8 +154,11 @@ architecture, single Gradle module: `domain` (pure) → `data` (impls) →
 - `organism/` — `LibraryRail` (left navigation column: scopes + category CRUD;
   hoisted to `App` beside the grid, backed by `grid/LibraryRailViewModel`),
   `GridTopBar` (slim: rail toggle + identity + view/export) /
-  `GridSelectionTopBar`, `BrowserTopBar`/`BrowserCategoryHud`, `PhotoThumbnail`,
-  `SurveyTileView`, `TopBarScaffold`.
+  `GridSelectionTopBar`, `BrowserTopBar`/`BrowserCategoryHud`,
+  `BrowserDetailsPanel` (the browser's right-anchored file/EXIF facts + an
+  "AI insights - coming soon" slot; latched by the browser's `I` key),
+  `PhotoThumbnail`, `SurveyTileView` (both take an optional immutable `signals`
+  lane), `TopBarScaffold`.
 
 ## By task — open these first
 

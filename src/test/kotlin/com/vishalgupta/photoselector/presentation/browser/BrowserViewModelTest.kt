@@ -2,6 +2,7 @@ package com.vishalgupta.photoselector.presentation.browser
 
 import androidx.compose.ui.graphics.ImageBitmap
 import com.vishalgupta.photoselector.data.image.ImageLoader
+import com.vishalgupta.photoselector.domain.grouping.CaptureMetadata
 import com.vishalgupta.photoselector.domain.model.Photo
 import com.vishalgupta.photoselector.domain.model.PhotoId
 import com.vishalgupta.photoselector.domain.model.RootFolder
@@ -69,6 +70,7 @@ class BrowserViewModelTest {
             categories = FakeCategoriesRepository(),
             moveToTrash = MovePhotosToTrashUseCase(trash),
             imageLoader = noOpImageLoader,
+            captureMetadataSource = { CaptureMetadata.NONE },
             isReadOnly = MutableStateFlow(false),
             dispatcher = dispatcher,
         )
