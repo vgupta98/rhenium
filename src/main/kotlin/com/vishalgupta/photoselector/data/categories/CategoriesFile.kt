@@ -23,13 +23,34 @@ data class PhotoEntryDto(
     val mtimeMs: Long = -1,
 )
 
-/** A category as persisted in the v2 file: metadata plus its photo descriptors. */
+/**
+ * A rule descriptor as persisted for a smart category. A bare [type] discriminator (not
+ * kotlinx polymorphism) keeps the schema flat and additive: an unknown future [type] decodes to a
+ * `CategoryRuleDto` the repository maps to `null` (treated as manual — safe), never a hard failure.
+ */
+@Serializable
+data class CategoryRuleDto(val type: String) {
+    companion object {
+        const val RAW_FILES = "raw-files"
+    }
+}
+
+/**
+ * A category as persisted in the v2 file: metadata plus its photo descriptors. Additive smart-category
+ * fields (decoded through `ignoreUnknownKeys`, so old files load unchanged and old readers ignore
+ * them — no version bump): [rule] is the self-fill rule when the category is smart (null = manual),
+ * and for a smart category [photos] holds the manual **pins** while [excluded] holds the manual
+ * **excludes** (deviations from the rule's natural matches). For a manual category [photos] is the
+ * whole membership and [excluded] is empty, exactly as before.
+ */
 @Serializable
 data class CategoryDto(
     val id: String,
     val name: String,
     val builtIn: Boolean = false,
     val photos: List<PhotoEntryDto> = emptyList(),
+    val excluded: List<PhotoEntryDto> = emptyList(),
+    val rule: CategoryRuleDto? = null,
 )
 
 /**

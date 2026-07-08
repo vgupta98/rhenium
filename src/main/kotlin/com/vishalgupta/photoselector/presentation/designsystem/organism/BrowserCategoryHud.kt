@@ -12,6 +12,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import com.vishalgupta.photoselector.domain.model.Category
 import com.vishalgupta.photoselector.domain.model.CategoryId
+import com.vishalgupta.photoselector.presentation.common.customCategories
 import com.vishalgupta.photoselector.presentation.designsystem.atom.FavouriteStar
 import com.vishalgupta.photoselector.presentation.designsystem.atom.RejectFlag
 import com.vishalgupta.photoselector.presentation.designsystem.molecule.CategoryHudChip
@@ -39,7 +40,8 @@ fun BrowserCategoryHud(
     if (categories.isEmpty()) return
     val favourites = categories.firstOrNull { it.id == Category.FAVOURITES_ID }
     val rejects = categories.firstOrNull { it.id == Category.REJECTS_ID }
-    val customs = categories.filter { !it.builtIn }
+    // Smart categories self-fill from a rule; only manual buckets carry the 1..9 digit legend.
+    val customs = categories.customCategories()
     val inactiveContainer = AppTheme.colors.overlayChromeInactiveFill
     val inactiveContent = AppTheme.colors.onOverlayChrome
     val iconSize = Modifier.size(AppTheme.dimens.iconSm)

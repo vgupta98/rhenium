@@ -4,7 +4,11 @@ import com.vishalgupta.photoselector.data.categories.JsonCategoriesRepository
 import com.vishalgupta.photoselector.domain.model.Category
 import com.vishalgupta.photoselector.domain.model.Photo
 import com.vishalgupta.photoselector.domain.model.PhotoId
+import com.vishalgupta.photoselector.domain.model.RawFilesResolver
 import com.vishalgupta.photoselector.domain.model.RootFolder
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import org.openjdk.jmh.annotations.Benchmark
@@ -65,6 +69,8 @@ open class FavouritesToggleBenchmark {
         repo = JsonCategoriesRepository(
             Json { prettyPrint = true; encodeDefaults = true },
             scannedPhotos = { listOf(photo) },
+            ruleResolver = RawFilesResolver(emptySet()),
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined),
         )
         // Force initial bind so the first measured toggle isn't disproportionately slow.
         repo.observeMemberships(root)

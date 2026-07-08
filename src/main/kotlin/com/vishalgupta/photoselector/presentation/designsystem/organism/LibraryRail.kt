@@ -18,6 +18,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material3.HorizontalDivider
@@ -42,6 +43,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.vishalgupta.photoselector.domain.model.Category
 import com.vishalgupta.photoselector.domain.model.CategoryId
+import com.vishalgupta.photoselector.domain.model.CategoryKind
 import com.vishalgupta.photoselector.presentation.common.categorySlotDigit
 import com.vishalgupta.photoselector.presentation.designsystem.atom.FavouriteStar
 import com.vishalgupta.photoselector.presentation.designsystem.atom.RejectFlag
@@ -104,10 +106,12 @@ fun LibraryRail(
     var confirmingEmptyRejects by remember { mutableStateOf(false) }
 
     // Built-in scopes (Favourites, Rejects) render first, in canonical order, each with its own
-    // glyph; custom categories follow with their slot digit. Generalised over `builtIn` rather than
-    // special-casing Favourites, so a new built-in is one entry in Category.builtIns.
+    // glyph; smart (rule-resolved) categories get their own section next; manual custom categories
+    // follow with their slot digit. Generalised over `builtIn`/`kind` rather than special-casing, so
+    // a new built-in is one entry in Category.builtIns and a new smart rule one in Category.smartSeeds.
     val builtInEntries = entries.filter { it.first.builtIn }
-    val customEntries = entries.filter { !it.first.builtIn }
+    val smartEntries = entries.filter { it.first.kind == CategoryKind.SMART }
+    val customEntries = entries.filter { !it.first.builtIn && it.first.kind == CategoryKind.MANUAL }
     val rejectsCount = entries.firstOrNull { it.first.id == Category.REJECTS_ID }?.second ?: 0
 
     Column(
@@ -157,6 +161,28 @@ fun LibraryRail(
                     null
                 },
             )
+        }
+
+        // Smart categories: rule-resolved buckets that self-fill (e.g. "RAW files"). Distinguished by
+        // an auto/rule glyph, and deliberately without a slot digit or the rename/delete "⋯" menu —
+        // they're not user-managed and the 1..9 filing keys stay bound to the manual buckets below.
+        if (smartEntries.isNotEmpty()) {
+            RailSectionLabel("Smart")
+            smartEntries.forEach { (category, count) ->
+                RailRow(
+                    label = category.name,
+                    selected = scope.isCategory(category.id),
+                    count = count,
+                    onClick = { onSelectCategory(category.id) },
+                    leading = {
+                        Icon(
+                            Icons.Outlined.AutoAwesome,
+                            contentDescription = null,
+                            modifier = Modifier.size(AppTheme.dimens.iconSm),
+                        )
+                    },
+                )
+            }
         }
 
         RailSectionLabel("Categories")

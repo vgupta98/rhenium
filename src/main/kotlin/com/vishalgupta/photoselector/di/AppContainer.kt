@@ -39,6 +39,7 @@ import com.vishalgupta.photoselector.domain.grouping.SimilarityGrouper
 import com.vishalgupta.photoselector.domain.model.DecodedImage
 import com.vishalgupta.photoselector.domain.model.Photo
 import com.vishalgupta.photoselector.domain.model.PhotoId
+import com.vishalgupta.photoselector.domain.model.RawFilesResolver
 import com.vishalgupta.photoselector.domain.model.RootFolder
 import com.vishalgupta.photoselector.domain.repository.BrowsePosition
 import com.vishalgupta.photoselector.domain.repository.CategoriesRepository
@@ -223,7 +224,15 @@ class AppContainer {
 
     private val photoRepository: PhotoRepository = FileSystemPhotoRepository(formatRegistry)
     private val categoriesRepository: CategoriesRepository =
-        JsonCategoriesRepository(json, scannedPhotos = { root -> photosFor(root) })
+        JsonCategoriesRepository(
+            json = json,
+            scannedPhotos = { root -> photosFor(root) },
+            // "What is RAW" has one source of truth — the RAW decoder's extension set (the object is
+            // available regardless of platform; only its decoder registration is macOS-gated).
+            ruleResolver = RawFilesResolver(RawDecoder.Companion.RawFormat.extensions),
+            // The async rule pass rides the app scope and is cancelled per root via clearContext (in reset).
+            scope = appScope,
+        )
     private val browsePositionRepository: BrowsePositionRepository = JsonBrowsePositionRepository(json)
     // Global one-off flags (the first-run Similarity coachmark "seen" bit). One small JSON doc in the
     // cache dir, written through the shared AtomicJsonWriter.
