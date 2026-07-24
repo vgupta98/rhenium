@@ -10,7 +10,9 @@ import androidx.compose.ui.graphics.Canvas
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Paint
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.unit.dp
 import com.vishalgupta.photoselector.data.image.ImageLoader
 import com.vishalgupta.photoselector.domain.model.Category
@@ -18,6 +20,7 @@ import com.vishalgupta.photoselector.domain.model.CategoryId
 import com.vishalgupta.photoselector.domain.model.Photo
 import com.vishalgupta.photoselector.domain.model.PhotoGroup
 import com.vishalgupta.photoselector.domain.model.PhotoId
+import com.vishalgupta.photoselector.domain.repository.CategoryAnalysisState
 import com.vishalgupta.photoselector.presentation.common.GroupingMode
 import com.vishalgupta.photoselector.presentation.designsystem.organism.LibraryRail
 import com.vishalgupta.photoselector.presentation.designsystem.theme.AppTheme
@@ -203,6 +206,81 @@ class LibraryRailScreenshotTest {
             ),
         )
         rule.dumpScreenshot("library-rail-smart-raw")
+    }
+
+    @Test fun `rail smart section prompts to analyze before the insight pass has run`() {
+        // Eyeball build/screenshots/library-rail-analyze-prompt.png: under "SMART" the header carries an
+        // "Analyze folder" action, the "RAW files" row shows its resolved count, and the insight-backed
+        // "Sharp" row shows "—" with an "Analyze to populate" sub-label (never a misleading 0).
+        val smartRaw = Category.smartRaw()
+        val sharp = Category.smartSharp()
+        val cats = listOf(Category.favourites(), Category.rejects(), smartRaw, sharp, keepers)
+        val members = mapOf(
+            Category.SMART_RAW_ID to setOf(photos[0].id, photos[2].id),
+            keepers.id to setOf(photos[0].id),
+        )
+        rule.setContent {
+            AppTheme {
+                Surface(Modifier.size(320.dp, 560.dp)) {
+                    LibraryRail(
+                        rootName = "Iceland 2026",
+                        scope = CategoryScope.AllPhotos,
+                        entries = cats.map { it to (members[it.id]?.size ?: 0) },
+                        onSelectAllPhotos = {},
+                        onSelectCategory = {},
+                        onCreateCategory = {},
+                        onRenameCategory = { _, _ -> },
+                        onDeleteCategory = {},
+                        onChangeFolder = {},
+                        analysisStates = mapOf(
+                            Category.SMART_RAW_ID to CategoryAnalysisState.AlwaysReady,
+                            Category.SMART_SHARP_ID to CategoryAnalysisState.NotAnalyzed,
+                        ),
+                    )
+                }
+            }
+        }
+        rule.waitForIdle()
+        rule.onNodeWithText("Analyze folder").assertIsDisplayed()
+        rule.onNodeWithText("Analyze to populate").assertIsDisplayed()
+        rule.dumpScreenshot("library-rail-analyze-prompt")
+    }
+
+    @Test fun `rail smart section shows the sharp count and re-analyze once analyzed`() {
+        // Eyeball build/screenshots/library-rail-analyzed.png: the "Sharp" row shows its resolved count (2)
+        // and the Smart header action reads "Re-analyze".
+        val smartRaw = Category.smartRaw()
+        val sharp = Category.smartSharp()
+        val cats = listOf(Category.favourites(), Category.rejects(), smartRaw, sharp, keepers)
+        val members = mapOf(
+            Category.SMART_RAW_ID to setOf(photos[0].id, photos[2].id),
+            Category.SMART_SHARP_ID to setOf(photos[1].id, photos[3].id),
+            keepers.id to setOf(photos[0].id),
+        )
+        rule.setContent {
+            AppTheme {
+                Surface(Modifier.size(320.dp, 560.dp)) {
+                    LibraryRail(
+                        rootName = "Iceland 2026",
+                        scope = CategoryScope.AllPhotos,
+                        entries = cats.map { it to (members[it.id]?.size ?: 0) },
+                        onSelectAllPhotos = {},
+                        onSelectCategory = {},
+                        onCreateCategory = {},
+                        onRenameCategory = { _, _ -> },
+                        onDeleteCategory = {},
+                        onChangeFolder = {},
+                        analysisStates = mapOf(
+                            Category.SMART_RAW_ID to CategoryAnalysisState.AlwaysReady,
+                            Category.SMART_SHARP_ID to CategoryAnalysisState.Analyzed,
+                        ),
+                    )
+                }
+            }
+        }
+        rule.waitForIdle()
+        rule.onNodeWithText("Re-analyze").assertIsDisplayed()
+        rule.dumpScreenshot("library-rail-analyzed")
     }
 
     @Test fun `rail collapsed leaves the grid full-bleed`() {

@@ -6,8 +6,10 @@ import com.vishalgupta.photoselector.domain.model.Photo
 import com.vishalgupta.photoselector.domain.model.PhotoId
 import com.vishalgupta.photoselector.domain.model.RootFolder
 import com.vishalgupta.photoselector.domain.repository.CategoriesRepository
+import com.vishalgupta.photoselector.domain.repository.CategoryAnalysisState
 import com.vishalgupta.photoselector.domain.usecase.MovePhotosToTrashUseCase
 import com.vishalgupta.photoselector.presentation.StateHolder
+import com.vishalgupta.photoselector.presentation.common.InsightCoordinator
 import com.vishalgupta.photoselector.presentation.common.XmpSyncCoordinator
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
@@ -52,12 +54,28 @@ class LibraryRailViewModel(
     // Live RAW XMP-sidecar sync, owned per root by the container (like the grouping coordinator). The
     // rail footer re-exposes its state + toggle. Defaulted so tests that don't exercise sync omit it.
     private val xmpSync: XmpSyncCoordinator? = null,
+    // The gated insight (folder-analysis) pass, owned per process by the container. The rail's Smart-section
+    // header drives it and mirrors its progress; defaulted so tests that don't exercise insights omit it.
+    private val insights: InsightCoordinator? = null,
     // Drops the trashed photos from the container's scan snapshot + every retained grid, so screens
     // built or returned to after the sweep are without them. Same hook the per-photo deletes use.
     private val onPhotosDeleted: (Set<PhotoId>) -> Unit = {},
     parentJob: Job? = null,
     dispatcher: CoroutineDispatcher = Dispatchers.Swing,
 ) : StateHolder(parentJob, dispatcher) {
+
+    /** Per-category analysis state, for the rail's tri-state count/`—` rendering on insight categories. */
+    val analysisStates: StateFlow<Map<CategoryId, CategoryAnalysisState>> =
+        categories.observeAnalysisStates(root)
+
+    /** Live progress of the gated folder-analysis pass (null when idle), for the Smart header ring. */
+    val insightProgress: StateFlow<InsightCoordinator.Progress?> =
+        insights?.progress ?: MutableStateFlow<InsightCoordinator.Progress?>(null).asStateFlow()
+
+    /** Kicks off the explicit whole-folder insight pass over the current scan. No-op if not wired. */
+    fun analyzeFolder() {
+        insights?.analyze(photosForRoot())
+    }
 
     /** Live XMP-sync footer state (enabled + non-RAW skip count), mirrored from the coordinator. */
     val xmpSyncState: StateFlow<XmpSyncCoordinator.State> =

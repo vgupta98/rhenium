@@ -2,16 +2,23 @@ package com.vishalgupta.photoselector.presentation.designsystem.organism
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
+import com.vishalgupta.photoselector.domain.insight.InsightBand
+import com.vishalgupta.photoselector.domain.insight.InsightValue
+import com.vishalgupta.photoselector.domain.insight.LabeledInsight
 import com.vishalgupta.photoselector.presentation.designsystem.theme.AppTheme
 import java.time.Instant
 import java.time.ZoneOffset
@@ -37,6 +44,10 @@ fun BrowserDetailsPanel(
     captureTimeEpochMs: Long?,
     cameraId: String?,
     modifier: Modifier = Modifier,
+    // On-device AI insights for this photo, computed lazily while the panel is open. Rendered generically
+    // over the insight taxonomy (label + typed value), not hardcoded to any one signal. Empty while the
+    // lazy compute is in flight or when nothing is assessable.
+    insights: List<LabeledInsight> = emptyList(),
 ) {
     Surface(
         modifier = modifier,
@@ -67,10 +78,68 @@ fun BrowserDetailsPanel(
             HorizontalDivider(color = AppTheme.colorScheme.outlineVariant)
 
             Text(text = "AI insights", style = AppTheme.typography.titleMedium)
-            Text(
-                text = "Coming soon",
-                style = AppTheme.typography.bodyMedium,
-                color = AppTheme.colorScheme.onSurfaceVariant,
+            if (insights.isEmpty()) {
+                Text(
+                    text = "No insights for this photo",
+                    style = AppTheme.typography.bodyMedium,
+                    color = AppTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                insights.forEach { insight -> InsightRow(insight) }
+            }
+        }
+    }
+}
+
+/** One AI-insight row: the provider's label plus its value rendered by taxonomy type. */
+@Composable
+private fun InsightRow(insight: LabeledInsight) {
+    Column(verticalArrangement = Arrangement.spacedBy(AppTheme.spacing.xxs)) {
+        Text(
+            text = insight.label,
+            style = AppTheme.typography.labelMedium,
+            color = AppTheme.colorScheme.onSurfaceVariant,
+        )
+        when (val value = insight.value) {
+            is InsightValue.Scalar -> ScalarInsight(value)
+            // Scaffold taxonomy cases carry no render yet (see InsightValue); ignore until a later phase.
+            is InsightValue.Boolean, is InsightValue.Label, is InsightValue.LabelSet -> Unit
+        }
+    }
+}
+
+/** A scalar insight: its human band chip plus a labelled bar of the raw score within its range. */
+@Composable
+private fun ScalarInsight(scalar: InsightValue.Scalar) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(AppTheme.spacing.sm),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        scalar.band?.let { band ->
+            val positive = band == InsightBand.Sharp
+            Surface(
+                shape = AppTheme.shapes.small,
+                color = if (positive) AppTheme.colors.favourite else AppTheme.colorScheme.surfaceVariant,
+                contentColor = if (positive) AppTheme.colorScheme.onPrimary else AppTheme.colorScheme.onSurfaceVariant,
+            ) {
+                Text(
+                    text = band.id.replaceFirstChar { it.uppercase() },
+                    style = AppTheme.typography.labelMedium,
+                    modifier = Modifier.padding(
+                        horizontal = AppTheme.spacing.sm,
+                        vertical = AppTheme.spacing.xxs,
+                    ),
+                )
+            }
+        }
+        scalar.range?.let { range ->
+            val span = (range.max - range.min).takeIf { it > 0f } ?: 1f
+            val fraction = ((scalar.raw - range.min) / span).coerceIn(0f, 1f)
+            LinearProgressIndicator(
+                progress = { fraction },
+                modifier = Modifier.weight(1f),
+                color = AppTheme.colors.favourite,
+                trackColor = AppTheme.colorScheme.surfaceVariant,
             )
         }
     }
