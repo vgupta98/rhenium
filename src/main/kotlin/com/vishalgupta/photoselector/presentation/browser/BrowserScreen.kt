@@ -104,6 +104,7 @@ fun BrowserScreen(
         onBackToGrid = onBack,
         onCompare = onCompare,
         onShowInAllPhotos = onShowInAllPhotos,
+        onDetailsOpenChanged = viewModel::setDetailsPanelOpen,
         embedded = embedded,
         onSwitchToGrid = onSwitchToGrid,
     )
@@ -122,6 +123,9 @@ fun BrowserScreen(
     onBackToGrid: () -> Unit,
     onCompare: () -> Unit = {},
     onShowInAllPhotos: (() -> Unit)? = null,
+    // Notifies when the details panel latches open/closed, so the caller can compute this photo's insights
+    // lazily only while it's open. Defaulted so callers/tests without the insight platform ignore it.
+    onDetailsOpenChanged: (Boolean) -> Unit = {},
     // True when embedded in Inspect's browse mode: hides the library chrome and disables move-to-Trash
     // (a fixed inspect set isn't where you cull files). [onSwitchToGrid] is the toggle back to the
     // overview, shown only when there is a grid to return to.
@@ -140,6 +144,9 @@ fun BrowserScreen(
     // navigation for this browser session, resetting only when the browser leaves composition (this
     // remember is discarded). It is NOT tied to the HUD's hover reveal.
     var detailsOpen by remember { mutableStateOf(false) }
+    // Notify the caller when the panel is open so it computes the current photo's insights lazily
+    // (one cheap decode, cache-filled) — and stops when the panel closes.
+    LaunchedEffect(detailsOpen) { onDetailsOpenChanged(detailsOpen) }
 
     // The HUD auto-hides; any handled keystroke (and, via HoverOverlay, mouse movement)
     // reveals it. Bumping this token restarts the hide timer.
@@ -364,6 +371,7 @@ fun BrowserScreen(
                 sizeBytes = panelPhoto.sizeBytes,
                 captureTimeEpochMs = state.captureMetadata?.takenAtEpochMs,
                 cameraId = state.captureMetadata?.cameraId,
+                insights = state.insights,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(top = AppTheme.dimens.topBarHeight)

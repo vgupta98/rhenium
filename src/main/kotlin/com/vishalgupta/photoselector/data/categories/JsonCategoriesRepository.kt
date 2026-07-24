@@ -1,21 +1,29 @@
 package com.vishalgupta.photoselector.data.categories
 
 import com.vishalgupta.photoselector.data.io.AtomicJsonWriter
+import com.vishalgupta.photoselector.domain.insight.InsightAnalysisStatus
+import com.vishalgupta.photoselector.domain.insight.InsightBand
+import com.vishalgupta.photoselector.domain.insight.InsightProviderId
 import com.vishalgupta.photoselector.domain.model.Category
 import com.vishalgupta.photoselector.domain.model.CategoryId
 import com.vishalgupta.photoselector.domain.model.CategoryKind
 import com.vishalgupta.photoselector.domain.model.CategoryRule
 import com.vishalgupta.photoselector.domain.model.CategoryRuleResolver
+import com.vishalgupta.photoselector.domain.model.InsightComparator
 import com.vishalgupta.photoselector.domain.model.Photo
 import com.vishalgupta.photoselector.domain.model.PhotoId
 import com.vishalgupta.photoselector.domain.model.RootFolder
+import com.vishalgupta.photoselector.domain.model.providerIds
 import com.vishalgupta.photoselector.domain.repository.CategoriesRepository
+import com.vishalgupta.photoselector.domain.repository.CategoryAnalysisState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -54,6 +62,12 @@ class JsonCategoriesRepository(
     // App/root-lifetime scope the async rule pass launches on. Owned by DI; cancelled per root via the
     // [resolveJob] handle on rebind / [clearContext] (mirrors GroupingCoordinator's decoupled pass).
     private val scope: CoroutineScope,
+    // Whether the root's insight pass has run — mirrored from the InsightCoordinator. When it flips
+    // (Analyze completes, or the folder goes stale) the repository re-resolves insight-backed smart
+    // rules so their membership fills in, and maps it into the per-category analysis-state signal.
+    // Defaulted (a constant NotAnalyzed) so JMH/tests that don't exercise insights need no change.
+    private val insightStatus: StateFlow<InsightAnalysisStatus> =
+        MutableStateFlow(InsightAnalysisStatus.NotAnalyzed).asStateFlow(),
     private val idGenerator: () -> CategoryId = { CategoryId(UUID.randomUUID().toString()) },
 ) : CategoriesRepository {
 
@@ -61,9 +75,15 @@ class JsonCategoriesRepository(
 
     private var boundRoot: RootFolder? = null
     private var photosById: Map<PhotoId, Photo> = emptyMap()
+    // The current scan for the bound root, kept so a re-resolution (on an insight-status flip) can re-run
+    // the rule pass without re-reading the file.
+    private var boundScanned: List<Photo> = emptyList()
     private val categoriesFlow = MutableStateFlow(Category.builtIns)
     private val membershipsFlow = MutableStateFlow<Map<CategoryId, Set<PhotoId>>>(emptyMap())
+    private val analysisStatesFlow = MutableStateFlow<Map<CategoryId, CategoryAnalysisState>>(emptyMap())
     private val readOnly = MutableStateFlow(false)
+    // Watches [insightStatus] for the bound root; cancelled per root on rebind / clearContext.
+    private var insightStatusJob: Job? = null
 
     // Backing membership state, from which [membershipsFlow] (the exposed, resolved map) is derived.
     // manualMembers holds the whole set for MANUAL categories; pins/excludes are the SMART manual
@@ -80,6 +100,12 @@ class JsonCategoriesRepository(
     // Handle on the in-flight rule pass, so a rebind / clearContext can cancel a stale one.
     private var resolveJob: Job? = null
 
+    // The insight-status collector is long-lived (a StateFlow collect never completes), so it runs on a
+    // dedicated internal scope rather than the injected [scope]: launching it there would make it a
+    // permanent child that a `joinAll(scope.children)`-style await (the repository test harness) would
+    // hang on. It is still cancelled explicitly per root via [insightStatusJob].
+    private val insightObserverScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+
     override fun observeCategories(root: RootFolder): StateFlow<List<Category>> {
         if (boundRoot?.path != root.path) bind(root)
         return categoriesFlow.asStateFlow()
@@ -88,6 +114,11 @@ class JsonCategoriesRepository(
     override fun observeMemberships(root: RootFolder): StateFlow<Map<CategoryId, Set<PhotoId>>> {
         if (boundRoot?.path != root.path) bind(root)
         return membershipsFlow.asStateFlow()
+    }
+
+    override fun observeAnalysisStates(root: RootFolder): StateFlow<Map<CategoryId, CategoryAnalysisState>> {
+        if (boundRoot?.path != root.path) bind(root)
+        return analysisStatesFlow.asStateFlow()
     }
 
     override fun isReadOnly(root: RootFolder): StateFlow<Boolean> {
@@ -102,6 +133,7 @@ class JsonCategoriesRepository(
             categoriesFlow.value = categoriesFlow.value + Category(id, name.trim(), builtIn = false)
             manualMembers = manualMembers + (id to emptySet())
             commit(root)
+            refreshAnalysisStates()
             id
         }
     }
@@ -126,6 +158,7 @@ class JsonCategoriesRepository(
             categoriesFlow.value = categoriesFlow.value.filterNot { it.id == id }
             manualMembers = manualMembers - id
             commit(root)
+            refreshAnalysisStates()
         }
     }
 
@@ -204,10 +237,14 @@ class JsonCategoriesRepository(
         mutex.withLock {
             resolveJob?.cancel()
             resolveJob = null
+            insightStatusJob?.cancel()
+            insightStatusJob = null
             boundRoot = null
             photosById = emptyMap()
+            boundScanned = emptyList()
             categoriesFlow.value = Category.builtIns
             membershipsFlow.value = emptyMap()
+            analysisStatesFlow.value = emptyMap()
             manualMembers = emptyMap()
             pins = emptyMap()
             excludes = emptyMap()
@@ -259,6 +296,7 @@ class JsonCategoriesRepository(
 
     private fun bind(root: RootFolder) {
         resolveJob?.cancel()
+        insightStatusJob?.cancel()
         // Synchronous read on the calling thread is acceptable: small file, infrequent.
         val scanned = scannedPhotos(root)
         val loaded = loadFromDisk(root)
@@ -273,6 +311,7 @@ class JsonCategoriesRepository(
             return
         }
         photosById = scanned.associateBy { it.id }
+        boundScanned = scanned
         categoriesFlow.value = loaded.map { it.toCategory() }
 
         val manual = LinkedHashMap<CategoryId, Set<PhotoId>>()
@@ -302,6 +341,7 @@ class JsonCategoriesRepository(
         // Rule matches are computed off-thread below; until then smart categories show pins-only.
         ruleMatches = emptyMap()
         membershipsFlow.value = resolvedMemberships()
+        refreshAnalysisStates()
         readOnly.value = !Files.isWritable(root.path)
         // Only treat the root as bound once we've resolved against a populated scan.
         // Resolving non-empty memberships against an empty scan (scan results not set
@@ -311,8 +351,41 @@ class JsonCategoriesRepository(
             boundRoot = root
             if (!readOnly.value && shouldMigrate(root)) migrateLegacyFavourites(root, loaded)
             launchRuleResolution(root, scanned)
+            // Re-resolve insight-backed rules whenever the pass state flips (Analyze completes, or the
+            // folder goes stale) and re-map the tri-state signal. drop(1): the current value is already
+            // reflected by the resolution above, so only react to *changes*.
+            insightStatusJob = insightObserverScope.launch {
+                insightStatus.drop(1).collect {
+                    if (boundRoot?.path == root.path) {
+                        launchRuleResolution(root, boundScanned)
+                        mutex.withLock { refreshAnalysisStates() }
+                    }
+                }
+            }
         } else {
             boundRoot = null
+        }
+    }
+
+    /**
+     * Recomputes the per-category analysis-state map from the current categories and the insight pass
+     * [insightStatus]. Manual categories and rules that need no insight pass (RAW files) are
+     * [CategoryAnalysisState.AlwaysReady]; an insight-backed smart rule mirrors the pass's status.
+     */
+    private fun refreshAnalysisStates() {
+        val status = insightStatus.value
+        analysisStatesFlow.value = categoriesFlow.value.associate { category ->
+            val rule = category.rule
+            val state = if (rule == null || rule.providerIds().isEmpty()) {
+                CategoryAnalysisState.AlwaysReady
+            } else {
+                when (status) {
+                    InsightAnalysisStatus.NotAnalyzed -> CategoryAnalysisState.NotAnalyzed
+                    InsightAnalysisStatus.Analyzed -> CategoryAnalysisState.Analyzed
+                    InsightAnalysisStatus.Stale -> CategoryAnalysisState.Stale
+                }
+            }
+            category.id to state
         }
     }
 
@@ -470,12 +543,47 @@ class JsonCategoriesRepository(
 
     private fun CategoryRule.toDto(): CategoryRuleDto = when (this) {
         CategoryRule.RawFiles -> CategoryRuleDto(CategoryRuleDto.RAW_FILES)
+        is CategoryRule.Leaf -> CategoryRuleDto(
+            type = CategoryRuleDto.INSIGHT_LEAF,
+            providerId = providerId.value,
+            comparator = when (comparator) { InsightComparator.InBand -> CategoryRuleDto.COMPARATOR_IN_BAND },
+            band = operand.id,
+        )
+        is CategoryRule.And -> CategoryRuleDto(CategoryRuleDto.AND, children = children.map { it.toDto() })
+        is CategoryRule.Or -> CategoryRuleDto(CategoryRuleDto.OR, children = children.map { it.toDto() })
+        is CategoryRule.Not -> CategoryRuleDto(CategoryRuleDto.NOT, children = listOf(child.toDto()))
     }
 
-    // An unknown future rule type decodes to null → treated as manual (safe forward-compat).
+    /**
+     * Decodes a persisted rule tree. An unknown [CategoryRuleDto.type], a malformed leaf (unknown
+     * comparator, missing fields), or a composite with any undecodable child returns null → the category
+     * is treated as manual and its raw `rule`/`excluded` preserved through a rewrite (the #120 forward-compat
+     * path). A leaf whose *provider* is merely unregistered still decodes fine — the tree shape is known,
+     * so the category stays smart and the resolver simply matches nothing for it (graceful degrade).
+     */
     private fun CategoryRuleDto.toDomain(): CategoryRule? = when (type) {
         CategoryRuleDto.RAW_FILES -> CategoryRule.RawFiles
+        CategoryRuleDto.INSIGHT_LEAF -> {
+            val provider = providerId
+            val comp = comparator?.let { if (it == CategoryRuleDto.COMPARATOR_IN_BAND) InsightComparator.InBand else null }
+            val bandId = band
+            if (provider != null && comp != null && bandId != null) {
+                CategoryRule.Leaf(InsightProviderId(provider), comp, InsightBand(bandId))
+            } else {
+                null
+            }
+        }
+        CategoryRuleDto.AND -> children?.mapAllOrNull { it.toDomain() }?.let { CategoryRule.And(it) }
+        CategoryRuleDto.OR -> children?.mapAllOrNull { it.toDomain() }?.let { CategoryRule.Or(it) }
+        CategoryRuleDto.NOT -> children?.singleOrNull()?.toDomain()?.let { CategoryRule.Not(it) }
         else -> null
+    }
+
+    /** Maps every element or returns null if any maps to null — an all-or-nothing tree decode. */
+    private inline fun <T, R> List<T>.mapAllOrNull(transform: (T) -> R?): List<R>? {
+        val out = ArrayList<R>(size)
+        for (e in this) out += transform(e) ?: return null
+        return out
     }
 
     private companion object {

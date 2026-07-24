@@ -1,5 +1,8 @@
 package com.vishalgupta.photoselector.domain.model
 
+import com.vishalgupta.photoselector.domain.insight.InsightBand
+import com.vishalgupta.photoselector.domain.insight.InsightProviderId
+
 /**
  * How a category's membership is decided. Orthogonal to [Category.builtIn] — a category can be
  * built-in or custom independently of being manual or smart.
@@ -42,6 +45,10 @@ data class Category(
         val SMART_RAW_ID: CategoryId = CategoryId("smart-raw")
         const val SMART_RAW_NAME: String = "RAW files"
 
+        /** Fixed id of the always-provided "Sharp" insight smart category, stable across roots/versions. */
+        val SMART_SHARP_ID: CategoryId = CategoryId("smart-sharp")
+        const val SMART_SHARP_NAME: String = "Sharp"
+
         fun favourites(): Category = Category(FAVOURITES_ID, FAVOURITES_NAME, builtIn = true)
         fun rejects(): Category = Category(REJECTS_ID, REJECTS_NAME, builtIn = true)
 
@@ -55,6 +62,24 @@ data class Category(
         )
 
         /**
+         * The "Sharp" insight smart category: rule-resolved from the bundled sharpness provider's banded
+         * output (`sharpness in Sharp`). The first *insight-backed* smart category — it self-fills like
+         * [smartRaw] but only after an explicit folder Analyze (its raw pass is gated), so pre-analysis it
+         * reads as not-yet-populated rather than empty. See the insight-provider platform note.
+         */
+        fun smartSharp(): Category = Category(
+            id = SMART_SHARP_ID,
+            name = SMART_SHARP_NAME,
+            builtIn = false,
+            kind = CategoryKind.SMART,
+            rule = CategoryRule.Leaf(
+                providerId = InsightProviderId("sharpness"),
+                comparator = InsightComparator.InBand,
+                operand = InsightBand.Sharp,
+            ),
+        )
+
+        /**
          * The built-in categories, in canonical display order: Favourites (keep) then Rejects
          * (reject). The single source of which buckets the app always provides — the repository
          * seeds and normalises against this, so adding a third built-in is one entry here.
@@ -62,10 +87,11 @@ data class Category(
         val builtIns: List<Category> = listOf(favourites(), rejects())
 
         /**
-         * The always-provided smart categories, seeded per root just like [builtIns]. Ship one for
-         * now ("RAW files"); a future rule (AI or otherwise) is one more entry here plus its resolver.
+         * The always-provided smart categories, seeded per root just like [builtIns]: the extension-based
+         * "RAW files" and the insight-backed "Sharp". A future rule (AI or otherwise) is one more entry
+         * here plus its resolver / provider.
          */
-        val smartSeeds: List<Category> = listOf(smartRaw())
+        val smartSeeds: List<Category> = listOf(smartRaw(), smartSharp())
 
         /** Ids of the built-in categories — none can be renamed or deleted. */
         val BUILT_IN_IDS: Set<CategoryId> = builtIns.mapTo(LinkedHashSet()) { it.id }

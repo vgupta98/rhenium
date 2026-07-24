@@ -27,11 +27,29 @@ data class PhotoEntryDto(
  * A rule descriptor as persisted for a smart category. A bare [type] discriminator (not
  * kotlinx polymorphism) keeps the schema flat and additive: an unknown future [type] decodes to a
  * `CategoryRuleDto` the repository maps to `null` (treated as manual — safe), never a hard failure.
+ *
+ * A recursive **predicate tree**: [RAW_FILES] carries only [type] (unchanged from before), an
+ * [INSIGHT_LEAF] carries [providerId] / [comparator] / [band], and [AND] / [OR] / [NOT] carry
+ * [children]. All fields past [type] are nullable and additive, so an old `raw-files` file decodes
+ * unchanged through `ignoreUnknownKeys` and stays v2. `RawFiles` still serializes as `type:"raw-files"`.
  */
 @Serializable
-data class CategoryRuleDto(val type: String) {
+data class CategoryRuleDto(
+    val type: String,
+    val providerId: String? = null,
+    val comparator: String? = null,
+    val band: String? = null,
+    val children: List<CategoryRuleDto>? = null,
+) {
     companion object {
         const val RAW_FILES = "raw-files"
+        const val INSIGHT_LEAF = "insight-leaf"
+        const val AND = "and"
+        const val OR = "or"
+        const val NOT = "not"
+
+        // Comparator discriminators for an INSIGHT_LEAF (mirrors domain InsightComparator).
+        const val COMPARATOR_IN_BAND = "in-band"
     }
 }
 

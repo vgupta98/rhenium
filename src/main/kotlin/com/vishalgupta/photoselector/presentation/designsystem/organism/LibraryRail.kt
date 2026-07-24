@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.PhotoLibrary
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -44,7 +45,9 @@ import androidx.compose.ui.unit.dp
 import com.vishalgupta.photoselector.domain.model.Category
 import com.vishalgupta.photoselector.domain.model.CategoryId
 import com.vishalgupta.photoselector.domain.model.CategoryKind
+import com.vishalgupta.photoselector.domain.repository.CategoryAnalysisState
 import com.vishalgupta.photoselector.presentation.common.categorySlotDigit
+import com.vishalgupta.photoselector.presentation.designsystem.atom.AppTextButton
 import com.vishalgupta.photoselector.presentation.designsystem.atom.FavouriteStar
 import com.vishalgupta.photoselector.presentation.designsystem.atom.RejectFlag
 import com.vishalgupta.photoselector.presentation.designsystem.molecule.CategoryActionsMenu
@@ -90,6 +93,15 @@ fun LibraryRail(
     // Sweeps the whole Rejects bucket to the Trash (the rail confirms first). The caller performs
     // the move and empties the bucket; defaulted so the stateless rail renders without the wiring.
     onEmptyRejects: () -> Unit = {},
+    // Per-category analysis state, for the tri-state count on insight-backed smart categories: an id
+    // absent from the map (and any non-insight category) reads as AlwaysReady (its count shown as-is).
+    analysisStates: Map<CategoryId, CategoryAnalysisState> = emptyMap(),
+    // Kicks off the explicit whole-folder insight pass from the Smart section header. [analyzing] +
+    // [analyzeProgress] (0f..1f, determinate) drive its ring while it runs. Defaulted so callers/tests
+    // without the insight platform render the rail unchanged.
+    onAnalyzeFolder: () -> Unit = {},
+    analyzing: Boolean = false,
+    analyzeProgress: Float? = null,
     // Live XMP-sidecar sync footer state (whole-root, persisted per root). [xmpSyncSkippedNonRaw] is
     // the count of non-RAW photos that won't get a sidecar, shown only while on. Defaulted so the
     // stateless rail (and older callers/tests) render without the wiring.
@@ -163,16 +175,34 @@ fun LibraryRail(
             )
         }
 
-        // Smart categories: rule-resolved buckets that self-fill (e.g. "RAW files"). Distinguished by
-        // an auto/rule glyph, and deliberately without a slot digit or the rename/delete "⋯" menu —
+        // Smart categories: rule-resolved buckets that self-fill (e.g. "RAW files", "Sharp"). Distinguished
+        // by an auto/rule glyph, and deliberately without a slot digit or the rename/delete "⋯" menu —
         // they're not user-managed and the 1..9 filing keys stay bound to the manual buckets below.
         if (smartEntries.isNotEmpty()) {
-            RailSectionLabel("Smart")
+            // Any insight-backed smart category (one whose analysis state isn't AlwaysReady) means the
+            // Smart header carries the "Analyze folder" action; RAW files alone would not.
+            val insightStates = smartEntries.mapNotNull { analysisStates[it.first.id] }
+                .filter { it != CategoryAnalysisState.AlwaysReady }
+            SmartSectionHeader(
+                showAnalyze = insightStates.isNotEmpty(),
+                anyStale = insightStates.any { it == CategoryAnalysisState.Stale },
+                anyAnalyzed = insightStates.any { it == CategoryAnalysisState.Analyzed },
+                analyzing = analyzing,
+                analyzeProgress = analyzeProgress,
+                onAnalyze = onAnalyzeFolder,
+            )
             smartEntries.forEach { (category, count) ->
+                val analysis = analysisStates[category.id] ?: CategoryAnalysisState.AlwaysReady
                 RailRow(
                     label = category.name,
                     selected = scope.isCategory(category.id),
+                    // Not-analyzed insight categories show "—" and a prompt, never a misleading 0.
                     count = count,
+                    countText = when (analysis) {
+                        CategoryAnalysisState.NotAnalyzed -> "—"
+                        else -> null
+                    },
+                    supporting = if (analysis == CategoryAnalysisState.NotAnalyzed) "Analyze to populate" else null,
                     onClick = { onSelectCategory(category.id) },
                     leading = {
                         Icon(
@@ -316,6 +346,52 @@ private fun RailHeader(rootName: String, onChangeFolder: () -> Unit) {
     }
 }
 
+/**
+ * The Smart section's header: the muted "SMART" label plus, when an insight-backed smart category is
+ * present, the explicit "Analyze folder" action (reusing the [AppTextButton] atom). The label flips to
+ * "Re-analyze (folder changed)" when any insight category is stale, "Re-analyze" once analyzed, and
+ * carries a determinate ring — the same cue family as the Similarity pass — while [analyzing].
+ */
+@Composable
+private fun SmartSectionHeader(
+    showAnalyze: Boolean,
+    anyStale: Boolean,
+    anyAnalyzed: Boolean,
+    analyzing: Boolean,
+    analyzeProgress: Float?,
+    onAnalyze: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(end = AppTheme.spacing.sm),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RailSectionLabel("Smart")
+        if (showAnalyze) {
+            Spacer(Modifier.weight(1f))
+            if (analyzing) {
+                CircularProgressIndicator(
+                    progress = { analyzeProgress ?: 0f },
+                    modifier = Modifier.size(AppTheme.dimens.iconSm),
+                    strokeWidth = 2.dp,
+                )
+                Spacer(Modifier.width(AppTheme.spacing.xs))
+            }
+            val label = when {
+                anyStale -> "Re-analyze (folder changed)"
+                anyAnalyzed -> "Re-analyze"
+                else -> "Analyze folder"
+            }
+            AppTextButton(
+                text = label,
+                onClick = onAnalyze,
+                enabled = !analyzing,
+                leadingIcon = if (analyzing) null else Icons.Outlined.AutoAwesome,
+                contentColor = AppTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
 /** Muted group label between rail sections (e.g. "Categories"). */
 @Composable
 private fun RailSectionLabel(text: String) {
@@ -365,6 +441,10 @@ private fun RailRow(
     onClick: () -> Unit,
     leading: @Composable () -> Unit,
     count: Int? = null,
+    // Overrides the numeric [count] text when non-null (e.g. "—" for a not-yet-analyzed insight category).
+    countText: String? = null,
+    // Optional muted second line under the label (e.g. "Analyze to populate").
+    supporting: String? = null,
     actions: (@Composable () -> Unit)? = null,
     contentColor: Color = AppTheme.colorScheme.onSurface,
 ) {
@@ -399,17 +479,28 @@ private fun RailRow(
         horizontalArrangement = Arrangement.spacedBy(AppTheme.spacing.sm),
     ) {
         leading()
-        Text(
-            text = label,
-            style = AppTheme.typography.bodyMedium,
-            color = if (selected) AppTheme.colorScheme.onSurface else contentColor,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-        if (count != null) {
+        Column(Modifier.weight(1f)) {
             Text(
-                text = "$count",
+                text = label,
+                style = AppTheme.typography.bodyMedium,
+                color = if (selected) AppTheme.colorScheme.onSurface else contentColor,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (supporting != null) {
+                Text(
+                    text = supporting,
+                    style = AppTheme.typography.labelSmall,
+                    color = AppTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        val displayCount = countText ?: count?.toString()
+        if (displayCount != null) {
+            Text(
+                text = displayCount,
                 style = AppTheme.typography.bodySmall,
                 color = AppTheme.colorScheme.onSurfaceVariant,
             )

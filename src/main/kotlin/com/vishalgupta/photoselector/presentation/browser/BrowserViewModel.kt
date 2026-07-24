@@ -4,6 +4,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import com.vishalgupta.photoselector.data.image.ImageLoader
 import com.vishalgupta.photoselector.domain.grouping.CaptureMetadata
 import com.vishalgupta.photoselector.domain.grouping.CaptureMetadataSource
+import com.vishalgupta.photoselector.domain.insight.LabeledInsight
 import com.vishalgupta.photoselector.domain.model.Category
 import com.vishalgupta.photoselector.domain.model.CategoryId
 import com.vishalgupta.photoselector.domain.model.Photo
@@ -14,6 +15,7 @@ import com.vishalgupta.photoselector.domain.repository.CategoriesRepository
 import com.vishalgupta.photoselector.domain.usecase.MovePhotosToTrashUseCase
 import com.vishalgupta.photoselector.presentation.StateHolder
 import com.vishalgupta.photoselector.presentation.common.CategoryToggle
+import com.vishalgupta.photoselector.presentation.common.InsightCoordinator
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -51,6 +53,12 @@ data class BrowserUiState(
      * details panel only.
      */
     val captureMetadata: CaptureMetadata? = null,
+    /**
+     * Per-photo AI insights (label + banded value) for the details panel, computed lazily off-thread only
+     * while the panel is open. Empty until loaded (or when nothing is assessable). Rendered generically
+     * over the taxonomy, not hardcoded to sharpness.
+     */
+    val insights: List<LabeledInsight> = emptyList(),
 ) {
     companion object {
         fun initial(photos: List<Photo>) = BrowserUiState(
@@ -75,6 +83,9 @@ class BrowserViewModel(
     private val imageLoader: ImageLoader,
     private val captureMetadataSource: CaptureMetadataSource,
     private val isReadOnly: StateFlow<Boolean>,
+    // The gated insight coordinator, for the details panel's lazy per-photo compute. Nullable so tests /
+    // callers without the insight platform omit it (the panel simply shows no insight rows).
+    private val insights: InsightCoordinator? = null,
     parentJob: Job? = null,
     dispatcher: CoroutineDispatcher = Dispatchers.Swing,
     private val onPositionChanged: ((BrowsePosition) -> Unit)? = null,
@@ -120,6 +131,10 @@ class BrowserViewModel(
 
     private var loadJob: Job? = null
     private var metadataJob: Job? = null
+    private var insightsJob: Job? = null
+    // Whether the details panel is currently latched open; gates the per-photo insight compute so we
+    // never decode a browsed frame's sharpness while the panel is closed.
+    private var detailsPanelOpen: Boolean = false
     private var positionSaveJob: Job? = null
     private var pendingSavePosition: BrowsePosition? = null
     private var viewportLongEdgePx: Int = 1600
@@ -169,6 +184,7 @@ class BrowserViewModel(
                 isCurrentFavourite = photo.id in favourites(),
                 currentMemberships = membershipsOf(photo),
                 captureMetadata = null,
+                insights = emptyList(),
             )
         }
         scheduleSavePosition()
@@ -176,6 +192,7 @@ class BrowserViewModel(
         imageLoader.pin(photo.id)
         loadCurrent()
         loadCaptureMetadata()
+        if (detailsPanelOpen) loadInsights()
         prefetchAround()
     }
 
@@ -258,6 +275,7 @@ class BrowserViewModel(
                         isCurrentFavourite = false,
                         currentMemberships = emptySet(),
                         captureMetadata = null,
+                        insights = emptyList(),
                     )
                 }
             } else {
@@ -273,12 +291,14 @@ class BrowserViewModel(
                         isCurrentFavourite = newPhoto.id in favourites(),
                         currentMemberships = membershipsOf(newPhoto),
                         captureMetadata = null,
+                        insights = emptyList(),
                     )
                 }
                 imageLoader.unpinAllExcept(newPhoto.id)
                 imageLoader.pin(newPhoto.id)
                 loadCurrent()
                 loadCaptureMetadata()
+                if (detailsPanelOpen) loadInsights()
                 prefetchAround()
                 scheduleSavePosition()
             }
@@ -313,6 +333,29 @@ class BrowserViewModel(
             val meta = withContext(Dispatchers.IO) { captureMetadataSource.metadataFor(photo) }
             _state.update {
                 if (it.currentPhoto?.id == photo.id) it.copy(captureMetadata = meta) else it
+            }
+        }
+    }
+
+    /** The details panel's `I` latch; opening it computes the current photo's insights, closing it stops. */
+    fun setDetailsPanelOpen(open: Boolean) {
+        detailsPanelOpen = open
+        if (open) loadInsights() else insightsJob?.cancel()
+    }
+
+    /**
+     * Computes the current photo's insights off-thread for the panel (one cheap decode each, cache-filled),
+     * guarded by the photo id on write so a fast page-through never lands a stale read on the wrong photo.
+     * No-op when the insight platform isn't wired.
+     */
+    private fun loadInsights() {
+        insightsJob?.cancel()
+        val coordinator = insights ?: return
+        val photo = _state.value.currentPhoto ?: return
+        insightsJob = scope.launch {
+            val rows = withContext(Dispatchers.IO) { coordinator.insightsFor(photo) }
+            _state.update {
+                if (it.currentPhoto?.id == photo.id) it.copy(insights = rows) else it
             }
         }
     }

@@ -87,7 +87,7 @@ class JsonCategoriesRepositoryTest {
         val categories = repo.observeCategories(root).value
         // Both built-ins plus the always-seeded "RAW files" smart category, in canonical order.
         assertEquals(
-            listOf(Category.FAVOURITES_ID, Category.REJECTS_ID, Category.SMART_RAW_ID),
+            listOf(Category.FAVOURITES_ID, Category.REJECTS_ID, Category.SMART_RAW_ID, Category.SMART_SHARP_ID),
             categories.map { it.id },
         )
         assertTrue(categories.filter { it.builtIn }.all { it.id in Category.BUILT_IN_IDS })
@@ -116,7 +116,7 @@ class JsonCategoriesRepositoryTest {
         // A fresh repository reading the same file sees the persisted category + membership.
         val (reopened, _) = repo(listOf(photo("a.jpg", 100, 5), photo("b.jpg", 200, 6)))
         val categories = reopened.observeCategories(root).value
-        assertEquals(listOf("Favourites", "Rejects", "RAW files", "Selects"), categories.map { it.name })
+        assertEquals(listOf("Favourites", "Rejects", "RAW files", "Sharp", "Selects"), categories.map { it.name })
         assertEquals(
             setOf(PhotoId("b.jpg")),
             reopened.observeMemberships(root).value[selects],
@@ -209,7 +209,7 @@ class JsonCategoriesRepositoryTest {
 
         val categories = repo.observeCategories(root).value
         assertEquals(
-            listOf(Category.FAVOURITES_ID, Category.REJECTS_ID, Category.SMART_RAW_ID),
+            listOf(Category.FAVOURITES_ID, Category.REJECTS_ID, Category.SMART_RAW_ID, Category.SMART_SHARP_ID),
             categories.map { it.id },
         )
         assertEquals(setOf(PhotoId("a.jpg")), favouriteIds(repo, root))
@@ -226,7 +226,7 @@ class JsonCategoriesRepositoryTest {
 
         repo.delete(root, id)
         assertEquals(
-            listOf(Category.FAVOURITES_ID, Category.REJECTS_ID, Category.SMART_RAW_ID),
+            listOf(Category.FAVOURITES_ID, Category.REJECTS_ID, Category.SMART_RAW_ID, Category.SMART_SHARP_ID),
             repo.observeCategories(root).value.map { it.id },
         )
     }

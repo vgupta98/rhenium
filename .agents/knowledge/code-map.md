@@ -26,12 +26,22 @@ architecture, single Gradle module: `domain` (pure) → `data` (impls) →
 
 - `model/` — entities: `Photo`, `PhotoId`, `RootFolder`, `Category` (now carries a
   `kind: CategoryKind` (`MANUAL | SMART`, orthogonal to `builtIn`) and a nullable
-  `rule: CategoryRule`; seeds `smartRaw()`/`smartSeeds`), `CategoryId`, `CategoryRule`
-  (`CategoryRule.RawFiles` + the `CategoryRuleResolver` seam and its pure
-  `RawFilesResolver` — extension classification over an injected RAW-extension set),
+  `rule: CategoryRule`; seeds `smartRaw()` + `smartSharp()`/`smartSeeds`), `CategoryId`,
+  `CategoryRule` (a **predicate tree**: `RawFiles | Leaf(providerId, comparator, operand) |
+  And | Or | Not`, plus `providerIds()`; the `CategoryRuleResolver` seam and its pure
+  `RawFilesResolver` — extension classification over an injected RAW-extension set, the
+  RawFiles leaf handler),
   `PhotoGroup` (`Single | Burst`; `Burst.keyIndex` = representative frame),
   `DecodedImage`, `ScanProgress`.
-- `repository/` — interfaces: `PhotoRepository`, `CategoriesRepository`,
+- `insight/` — the insight-provider platform (Phase 1): `InsightValue` (the closed taxonomy —
+  concrete `Scalar`, scaffold `Boolean | Label | LabelSet`) + `InsightBand` / `InsightRange` /
+  `LabeledInsight`, the `InsightProvider` seam (`id`, `version`, `displayName`, `suspend value`),
+  `ScalarBanding` + the `BandingStrategy` seam (percentile → band, set-derived like
+  `SimilarityGrouper`), the `InsightSource` seam + `InsightAnalysisStatus`, and
+  `PredicateTreeResolver` (evaluates the `CategoryRule` tree, pulling each leaf's banded value
+  through an `InsightSource`; graceful-degrades an unknown/unavailable provider to "matches nothing").
+- `repository/` — interfaces: `PhotoRepository`, `CategoriesRepository` (now also
+  `observeAnalysisStates` → `CategoryAnalysisState` tri-state, with a default impl),
   `BrowsePositionRepository`, `AppPreferencesRepository`, `PhotoExporter`, `PhotoTrash`.
 - `usecase/` — `ScanRootFolderUseCase`, `CopyPhotosToFolderUseCase`,
   `ExportPhotosTxtUseCase`, `ExportPhotosXmpUseCase`, `MovePhotosToTrashUseCase`.
@@ -53,10 +63,12 @@ architecture, single Gradle module: `domain` (pure) → `data` (impls) →
   `PathFilters` (include/exclude rules).
 - `categories/` — `JsonCategoriesRepository` (membership persistence + v2
   migration; also the one place stored + rule-computed membership merge — seeds the
-  `smart-raw` category, resolves smart rules off-thread on an injected scope, folds
-  `(ruleMatches ∪ pins) \ excludes`, and prunes redundant overrides on rescan),
-  `CategoriesFile` (on-disk schema; `CategoryDto` gained additive `rule` +
-  `excluded`, still v2 via `ignoreUnknownKeys`), `MembershipResolver`.
+  `smart-raw` + `smart-sharp` categories, resolves smart rules off-thread on an injected
+  scope, folds `(ruleMatches ∪ pins) \ excludes`, prunes redundant overrides on rescan,
+  re-resolves + re-maps the tri-state `observeAnalysisStates` signal when the injected
+  `insightStatus` flips), `CategoriesFile` (on-disk schema; `CategoryRuleDto` extended
+  additively to a recursive predicate tree — `insight-leaf` / `and` / `or` / `not` fields
+  alongside `raw-files` — still v2 via `ignoreUnknownKeys`), `MembershipResolver`.
 - `browse/` — `JsonBrowsePositionRepository` (persists last scroll position).
 - `image/` — decode + cache: `SkikoImageLoader`, `ImageLoader`/`ImageCache`,
   `DiskThumbnailCache`.
@@ -74,6 +86,10 @@ architecture, single Gradle module: `domain` (pure) → `data` (impls) →
   `SharpnessScorer`, `PhotoFeatureExtractor` (+ `PhotoFeatures`), `EmbeddingCache`,
   `SimilarityPhotoGrouper` (adapter onto `PhotoGrouper`); `GroupingResultCache` +
   `CachingPhotoGrouper` (memoize the computed grouping so lens re-entry is instant).
+  Insight platform: `SharpnessInsightProvider` (the first `InsightProvider`, over
+  `decodeForSharpness` + `SharpnessScorer`, opportunistically reusing `EmbeddingCache`
+  sharpness), `InsightCache` (mirrors `EmbeddingCache`, one float per photo, keyed by
+  content+providerId+version), `SharpnessBanding` (the `BandingStrategy` for sharpness).
 - `prefs/` — `JsonAppPreferences` (global one-off flags: the first-run Similarity
   coachmark "seen" bit, plus the update checker's opt-out / skipped-version / stable
   rollout install-id; one small JSON via `AtomicJsonWriter`). Per-root
@@ -129,7 +145,12 @@ architecture, single Gradle module: `domain` (pure) → `data` (impls) →
   `SystemActions`, `CategoryHotkeys`, `CategoryToggle`, `GroupingMode`,
   `GroupingCoordinator` (owns the one background Similarity pass, decoupled from
   any grid's displayed lens — survives lens switches and navigation; exposes a
-  `progress` flow for the off-grid hint), `XmpSyncCoordinator` (root-scoped,
+  `progress` flow for the off-grid hint), `InsightCoordinator` (the gated analogue:
+  owns the explicit whole-folder insight pass, computes per-folder banding, tracks the
+  analyzed id set + staleness, and is the `InsightSource` the rule resolver reads through;
+  `progress` + `status` flows), `insightTileSignals` (derives an insight `TileSignal` lane
+  from insight-backed smart-category membership, shared by grid + survey),
+  `XmpSyncCoordinator` (root-scoped,
   retained per root; when enabled, runs a full whole-root reconcile then live
   delta-writes RAW sidecars on membership changes — mirrors `GroupingCoordinator`'s
   lifecycle; drives `ExportPhotosXmpUseCase`), `HoverOverlay`, `PlatformLabels`,
@@ -163,8 +184,9 @@ architecture, single Gradle module: `domain` (pure) → `data` (impls) →
   hoisted to `App` beside the grid, backed by `grid/LibraryRailViewModel`),
   `GridTopBar` (slim: rail toggle + identity + view/export) /
   `GridSelectionTopBar`, `BrowserTopBar`/`BrowserCategoryHud`,
-  `BrowserDetailsPanel` (the browser's right-anchored file/EXIF facts + an
-  "AI insights - coming soon" slot; latched by the browser's `I` key),
+  `BrowserDetailsPanel` (the browser's right-anchored file/EXIF facts + an AI-insights
+  section rendering `LabeledInsight` rows generically over the taxonomy; latched by the
+  browser's `I` key, computed lazily per-photo while open),
   `PhotoThumbnail`, `SurveyTileView` (both take an optional immutable `signals`
   lane), `TopBarScaffold`.
 
@@ -177,6 +199,7 @@ architecture, single Gradle module: `domain` (pure) → `data` (impls) →
 | Grouping lens (Off / Time / Similarity) | `domain/grouping/`, `data/ai/SimilarityPhotoGrouper.kt`, `grid/GridViewModel.kt`, `presentation/common/GroupingCoordinator.kt` (background Similarity), `App.kt` (off-grid hint) |
 | Scroll position / index translation | `grid/GridScreen.kt` (`tileIndexForFlat`), `grid/GridViewportAnchor.kt`, `grid/GridDisplayModel.kt`, `data/browse/` |
 | Categories / Favourites | `data/categories/`, `domain/repository/CategoriesRepository.kt`, `common/CategoryHotkeys.kt`, `designsystem/organism/LibraryRail.kt` |
+| Insight platform (providers, rules, analyze) | `domain/insight/`, `domain/model/CategoryRule.kt` (tree), `data/ai/SharpnessInsightProvider.kt` + `InsightCache.kt` + `SharpnessBanding.kt`, `presentation/common/InsightCoordinator.kt` + `InsightTileSignals.kt`, `grid/LibraryRailViewModel.kt` (Analyze), `di/AppContainer.kt` |
 | Grid chrome (rail / top bar / collapse) | `designsystem/organism/LibraryRail.kt`, `grid/LibraryRailViewModel.kt`, `designsystem/organism/GridTopBar.kt`, `grid/GridScreen.kt`, `App.kt` (rail mounted beside the grid, `railCollapsed`) |
 | Decoding a new format | `domain/format/PhotoDecoder.kt`, `data/format/DefaultPhotoFormatRegistry.kt`, register in `di/AppContainer.kt` |
 | HEIC / RAW specifics | `data/format/HeicDecoder.kt`, `data/format/RawDecoder.kt`, `data/format/macos/MacImageIO.kt` |

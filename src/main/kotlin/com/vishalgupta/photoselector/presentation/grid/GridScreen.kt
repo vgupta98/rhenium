@@ -79,6 +79,7 @@ import com.vishalgupta.photoselector.presentation.common.CategoryToggle
 import com.vishalgupta.photoselector.presentation.common.GroupingMode
 import com.vishalgupta.photoselector.presentation.common.NativeFileDialogs
 import com.vishalgupta.photoselector.presentation.common.customCategories
+import com.vishalgupta.photoselector.presentation.common.insightTileSignals
 import com.vishalgupta.photoselector.presentation.common.rememberAutoDismiss
 import com.vishalgupta.photoselector.presentation.designsystem.atom.AppOutlinedButton
 import com.vishalgupta.photoselector.presentation.designsystem.molecule.BurstExpandedFooter
@@ -807,6 +808,9 @@ private fun BoxScope.GridContent(
                             onToggleSelect = { onToggleSelection(index) },
                             onRangeSelect = { onSelectRange(index) },
                             categoryBadges = categoryBadgesFor(keyPhoto, customCategories, state.memberships),
+                            // Insight-derived signal lane: a chip per insight-backed smart category the
+                            // frame is in (e.g. "Sharp"), generic over the taxonomy.
+                            signals = insightTileSignals(keyPhoto.id, state.categories, state.memberships),
                             burstCount = (group as? PhotoGroup.Burst)?.photos?.size,
                             // The glyph echoes the active lens, and onReview opens the run
                             // side by side. Both null for singles and for an expanded burst's

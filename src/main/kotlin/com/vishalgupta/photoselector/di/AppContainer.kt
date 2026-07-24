@@ -16,8 +16,11 @@ import com.vishalgupta.photoselector.data.ai.DownscaleGrayEmbeddingModel
 import com.vishalgupta.photoselector.data.ai.EmbeddingCache
 import com.vishalgupta.photoselector.data.ai.EmbeddingModel
 import com.vishalgupta.photoselector.data.ai.GroupingResultCache
+import com.vishalgupta.photoselector.data.ai.InsightCache
 import com.vishalgupta.photoselector.data.ai.OnnxEmbeddingModel
 import com.vishalgupta.photoselector.data.ai.PhotoFeatureExtractor
+import com.vishalgupta.photoselector.data.ai.SharpnessBanding
+import com.vishalgupta.photoselector.data.ai.SharpnessInsightProvider
 import com.vishalgupta.photoselector.data.ai.SimilarityPhotoGrouper
 import com.vishalgupta.photoselector.data.trash.DesktopPhotoTrash
 import com.vishalgupta.photoselector.data.format.CachingCaptureMetadataSource
@@ -36,6 +39,7 @@ import com.vishalgupta.photoselector.data.image.SkikoImageLoader
 import com.vishalgupta.photoselector.domain.format.PhotoFormatRegistry
 import com.vishalgupta.photoselector.domain.grouping.PhotoGrouper
 import com.vishalgupta.photoselector.domain.grouping.SimilarityGrouper
+import com.vishalgupta.photoselector.domain.insight.PredicateTreeResolver
 import com.vishalgupta.photoselector.domain.model.DecodedImage
 import com.vishalgupta.photoselector.domain.model.Photo
 import com.vishalgupta.photoselector.domain.model.PhotoId
@@ -60,6 +64,7 @@ import com.vishalgupta.photoselector.domain.usecase.MovePhotosToTrashUseCase
 import com.vishalgupta.photoselector.domain.usecase.ScanRootFolderUseCase
 import com.vishalgupta.photoselector.presentation.browser.BrowserViewModel
 import com.vishalgupta.photoselector.presentation.common.GroupingCoordinator
+import com.vishalgupta.photoselector.presentation.common.InsightCoordinator
 import com.vishalgupta.photoselector.presentation.common.GroupingMode
 import com.vishalgupta.photoselector.presentation.common.XmpSyncCoordinator
 import com.vishalgupta.photoselector.presentation.common.MacSystemActions
@@ -194,6 +199,30 @@ class AppContainer {
     /** Progress of the background Similarity pass (null when idle), for the navigation host's hint. */
     val groupingActivity: StateFlow<GroupingCoordinator.Progress?> get() = groupingCoordinator.progress
 
+    // The insight platform (Phase 1): one bundled sharpness provider over the cheap decode+Laplacian path,
+    // its own content/provider-id keyed disk cache, and a gated whole-folder coordinator (the analogue of
+    // groupingCoordinator). No new model, network or ONNX — it reuses decodeForSharpness and opportunistically
+    // the embedding cache's already-scored sharpness. The coordinator is also the InsightSource the rule
+    // resolver reads a leaf's banded value through, and its status drives the categories' tri-state signal.
+    private val insightCache = InsightCache(
+        cacheDir = cacheDir,
+        providerId = SharpnessInsightProvider.ID.value,
+        providerVersion = SharpnessInsightProvider.VERSION,
+    ).also { it.startEviction(appScope) }
+    private val sharpnessProvider = SharpnessInsightProvider(
+        cache = insightCache,
+        decodeForSharpness = ::decodeForSharpness,
+        embeddingCache = embeddingCache,
+    )
+    private val insightCoordinator = InsightCoordinator(
+        bindings = listOf(InsightCoordinator.Binding(sharpnessProvider, SharpnessBanding)),
+        parentJob = appScope.coroutineContext[Job],
+        dispatcher = Dispatchers.IO,
+    )
+
+    /** Progress of the gated folder-analysis pass (null when idle), for the navigation host's chip. */
+    val insightActivity: StateFlow<InsightCoordinator.Progress?> get() = insightCoordinator.progress
+
     private fun loadEmbeddingModel(): EmbeddingModel = try {
         OnnxEmbeddingModel.Loader.fromResource()
     } catch (t: Throwable) {
@@ -227,11 +256,18 @@ class AppContainer {
         JsonCategoriesRepository(
             json = json,
             scannedPhotos = { root -> photosFor(root) },
-            // "What is RAW" has one source of truth — the RAW decoder's extension set (the object is
-            // available regardless of platform; only its decoder registration is macOS-gated).
-            ruleResolver = RawFilesResolver(RawDecoder.Companion.RawFormat.extensions),
+            // The predicate-tree resolver evaluates insight leaves via the coordinator (gated, cache-only)
+            // and delegates the RawFiles leaf to RawFilesResolver. "What is RAW" has one source of truth —
+            // the RAW decoder's extension set (available regardless of platform; only decoder registration
+            // is macOS-gated).
+            ruleResolver = PredicateTreeResolver(
+                rawFilesResolver = RawFilesResolver(RawDecoder.Companion.RawFormat.extensions),
+                source = insightCoordinator,
+            ),
             // The async rule pass rides the app scope and is cancelled per root via clearContext (in reset).
             scope = appScope,
+            // Re-resolve insight rules + map the tri-state signal when the analysis pass state flips.
+            insightStatus = insightCoordinator.status,
         )
     private val browsePositionRepository: BrowsePositionRepository = JsonBrowsePositionRepository(json)
     // Global one-off flags (the first-run Similarity coachmark "seen" bit). One small JSON doc in the
@@ -297,6 +333,9 @@ class AppContainer {
     private fun setScanResult(root: RootFolder, photos: List<Photo>) {
         scannedRoot = root
         scannedPhotos = photos
+        // A same-root rescan may have added/removed photos since the last analysis; re-check staleness
+        // (no-op before the first analysis, and after a root change the coordinator was already reset).
+        insightCoordinator.refreshStaleness(photos.mapTo(HashSet()) { it.id })
     }
 
     /**
@@ -307,6 +346,8 @@ class AppContainer {
     private fun removeScannedPhotos(ids: Set<PhotoId>) {
         if (ids.isEmpty()) return
         scannedPhotos = scannedPhotos.filterNot { it.id in ids }
+        // A deleted photo left the analyzed set, so an analyzed folder is now stale (no-op pre-analysis).
+        insightCoordinator.refreshStaleness(scannedPhotos.mapTo(HashSet()) { it.id })
         // Keep every retained grid's own photo list in step: a delete from the browser must not
         // reappear when the user returns to a grid that is now reused rather than rebuilt. The grid
         // that originated the delete already pruned itself, so its own notification is a no-op.
@@ -367,6 +408,7 @@ class AppContainer {
         imageLoader = imageLoader,
         captureMetadataSource = captureMetadataSource,
         isReadOnly = categoriesRepository.isReadOnly(root),
+        insights = insightCoordinator,
         parentJob = folderJob,
         onPhotosDeleted = { ids -> removeScannedPhotos(ids) },
         // Only All Photos owns the per-root scroll index; a category view (its own
@@ -425,6 +467,7 @@ class AppContainer {
                 imageLoader = imageLoader,
                 captureMetadataSource = captureMetadataSource,
                 isReadOnly = isReadOnly,
+                insights = insightCoordinator,
                 parentJob = folderJob,
                 onPositionChanged = null,
                 // Embedded browse disables move-to-Trash (BrowserScreen gates it on !embedded), so
@@ -501,6 +544,7 @@ class AppContainer {
                 moveToTrash = movePhotosToTrashUseCase,
                 photosForRoot = { photosFor(root) },
                 xmpSync = xmpSyncCoordinator(root),
+                insights = insightCoordinator,
                 onPhotosDeleted = { ids -> removeScannedPhotos(ids) },
                 parentJob = folderJob,
             )
@@ -539,6 +583,8 @@ class AppContainer {
         // Drop any in-flight background Similarity pass and clear its progress; the coordinator object
         // itself stays (the host collects its flow), only the per-root work is reset.
         groupingCoordinator.reset()
+        // Likewise the gated insight pass: drop its banding, analyzed set and progress for the new root.
+        insightCoordinator.reset()
         _folderJob.cancel()
         _folderJob = SupervisorJob(appScope.coroutineContext[Job])
         categoriesRepository.clearContext()

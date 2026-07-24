@@ -48,6 +48,8 @@ fun App(container: AppContainer) {
     // The background Similarity pass keeps running across navigation; this is its off-grid hint. On the
     // Grid the tab ring + banner carry it, so the chip is shown only on the other screens.
     val groupingActivity by container.groupingActivity.collectAsState()
+    // The gated folder-analysis (insight) pass; its off-grid chip mirrors the grouping one.
+    val insightActivity by container.insightActivity.collectAsState()
     val coroutineScope = rememberCoroutineScope()
 
     // App-lifetime, notify-only update checker. Built once and kept across navigation; the launch check
@@ -97,6 +99,8 @@ fun App(container: AppContainer) {
                     val railVm = remember(s.root.path) { container.libraryRailViewModel(s.root) }
                     val railEntries by railVm.entries.collectAsState()
                     val xmpSyncState by railVm.xmpSyncState.collectAsState()
+                    val analysisStates by railVm.analysisStates.collectAsState()
+                    val insightProgress by railVm.insightProgress.collectAsState()
                     // Surface the reject-sweep result as a transient pill: only SET the message here.
                     // The auto-dismiss is an App-scoped effect (above) so it survives this Grid branch
                     // leaving composition (a sweep then Grid -> Browser within the timer).
@@ -152,6 +156,12 @@ fun App(container: AppContainer) {
                                 onRenameCategory = railVm::rename,
                                 onDeleteCategory = railVm::delete,
                                 onEmptyRejects = railVm::emptyRejectsToTrash,
+                                analysisStates = analysisStates,
+                                onAnalyzeFolder = railVm::analyzeFolder,
+                                analyzing = insightProgress != null,
+                                analyzeProgress = insightProgress?.let { p ->
+                                    if (p.total <= 0) 0f else (p.processed.toFloat() / p.total).coerceIn(0f, 1f)
+                                },
                                 xmpSyncEnabled = xmpSyncState.enabled,
                                 xmpSyncSkippedNonRaw = xmpSyncState.skippedNonRaw,
                                 onToggleXmpSync = { railVm.toggleXmpSync() },
@@ -357,6 +367,15 @@ fun App(container: AppContainer) {
                 railSweepMessage?.let { PillToast(text = it) }
                 groupingActivity?.takeIf { screen !is Screen.Grid }?.let { activity ->
                     BackgroundGroupingChip(processed = activity.processed, total = activity.total)
+                }
+                // The gated folder-analysis pass reuses the same off-grid pill; on the Grid the rail's
+                // Smart-header ring carries it, so like the grouping chip it's suppressed there.
+                insightActivity?.takeIf { screen !is Screen.Grid }?.let { activity ->
+                    BackgroundGroupingChip(
+                        processed = activity.processed,
+                        total = activity.total,
+                        label = "Analyzing folder…",
+                    )
                 }
                 updateState.available?.let { available ->
                     UpdateAvailableBanner(

@@ -44,6 +44,7 @@ import com.vishalgupta.photoselector.domain.model.CategoryId
 import com.vishalgupta.photoselector.presentation.common.SystemActions
 import com.vishalgupta.photoselector.presentation.common.customCategories
 import com.vishalgupta.photoselector.presentation.common.digitSlot
+import com.vishalgupta.photoselector.presentation.common.insightTileSignals
 import com.vishalgupta.photoselector.presentation.designsystem.molecule.SurveyKeyboardLegend
 import com.vishalgupta.photoselector.presentation.designsystem.organism.BrowserCategoryHud
 import com.vishalgupta.photoselector.presentation.designsystem.organism.SurveyTileView
@@ -194,6 +195,7 @@ fun SurveyScreen(
                                     isActive = pos == state.activeTile,
                                     totalInScope = state.totalInScope,
                                     onActivate = { onSetActive(pos) },
+                                    signals = insightTileSignals(tile.memberships, state.categories),
                                     modifier = Modifier.weight(1f).fillMaxHeight(),
                                 )
                             }
