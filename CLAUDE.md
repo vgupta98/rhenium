@@ -145,6 +145,18 @@ Clean architecture, single Gradle module, package
   exposes one predicate-blind `observeMemberships` map flow; `CategoryScope` /
   `slice()` stay **closed and predicate-blind** — a smart category rides
   `Category(id)`, never its own scope case.
+  **Smart rules are a predicate tree, not one flag.** `CategoryRule` = `RawFiles |
+  Leaf(providerId, comparator, operand) | And | Or | Not`, resolved by
+  `PredicateTreeResolver` reading each `Leaf`'s banded value through an `InsightSource`.
+  Insight-backed smart categories are **gated**: their pass runs only on an explicit
+  "Analyze folder" (rail Smart-section action → `InsightCoordinator`, the gated analogue
+  of `GroupingCoordinator`), so the repository exposes a **tri-state**
+  `observeAnalysisStates` (NotAnalyzed `—` / Analyzed / Stale) alongside
+  `observeMemberships` and re-resolves when the pass completes. Keep the two degrade
+  paths distinct: an unknown rule **type** → `null` → **manual**, raw carried through
+  (#120); a known-shape `Leaf` with an unknown/unavailable **providerId** stays **smart**
+  and matches nothing. Seeded `smart-sharp` ("Sharp") is the first insight-backed one;
+  `smart-raw` is "always analyzed", untouched.
 - State plumbing: `StateFlow` for screen state, `SharedFlow` / `Channel`
   for one-shot events (toasts etc).
 
@@ -294,6 +306,15 @@ recovering a half-finished run — are in `.agents/knowledge/release.md`.
   *runtime* — and ONNX fails silently (falls back to the classical embedder). So
   validate keep changes against the packaged release app (Similarity lens +
   HEIC/RAW decode + favourite-relaunch), not `./gradlew run`, which skips ProGuard.
+- **Insight scores are gated + adaptively banded — never eager, never a raw number.** An
+  `InsightProvider` (Phase 1: `SharpnessInsightProvider` over `decodeForSharpness` +
+  variance-of-Laplacian, cached in `InsightCache` like `EmbeddingCache`) runs the whole folder
+  only on the explicit Analyze trigger (`InsightCoordinator`); the browser panel computes one
+  photo lazily on open. The raw scalar is **banded against the folder's own distribution**
+  (`ScalarBanding`/`BandingStrategy`, percentile → `Sharp`/`Soft`, the `SimilarityGrouper`
+  adaptive precedent), and the persisted `CategoryRule.Leaf` compares against a human **band**,
+  never a raw threshold. `InsightCache` is content+providerId+version keyed with its own
+  `FORMAT_VERSION` — bump it if the stored shape changes.
 - **skiko cannot decode HEIC/HEIF.** Verified by probe on the bundled
   skiko (`Image.makeFromEncoded` throws). There is no maintained
   cross-platform JVM HEIC library on Maven (`org.bytedeco:libheif` does
