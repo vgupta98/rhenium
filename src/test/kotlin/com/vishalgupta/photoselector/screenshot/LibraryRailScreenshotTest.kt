@@ -283,6 +283,30 @@ class LibraryRailScreenshotTest {
         rule.dumpScreenshot("library-rail-analyzed")
     }
 
+    @Test fun `grid tile in the sharp smart category lights the insight signal lane`() {
+        // The insight-derived tile lane, exercised end-to-end THROUGH GridScreen's insightTileSignals
+        // path (not a hand-built TileSignal): photos[0] is a member of the insight-backed "Sharp" smart
+        // category, so its tile carries the "Sharp" chip in the bottom-center lane; the others do not.
+        // Rail collapsed so the only "Sharp" text on screen is the tile chip. Eyeball
+        // build/screenshots/grid-insight-lane-sharp.png.
+        val sharp = Category.smartSharp()
+        val cats = listOf(Category.favourites(), Category.rejects(), sharp)
+        val members = mapOf(Category.SMART_SHARP_ID to setOf(photos[0].id))
+        renderShell(
+            GridUiState(
+                photos = photos,
+                groups = photos.map(PhotoGroup::Single),
+                groupingMode = GroupingMode.Off,
+                scope = CategoryScope.AllPhotos,
+                categories = cats,
+                memberships = members,
+            ),
+            railCollapsed = true,
+        )
+        rule.onNodeWithText("Sharp").assertIsDisplayed()
+        rule.dumpScreenshot("grid-insight-lane-sharp")
+    }
+
     @Test fun `rail collapsed leaves the grid full-bleed`() {
         renderShell(
             GridUiState(
