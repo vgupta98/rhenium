@@ -12,9 +12,11 @@ package com.vishalgupta.photoselector.domain.faces
  * too, with no obvious way to split them. Average linkage needs a cluster to be *consistently* close
  * before it merges, so a single bad edge is outvoted.
  *
- * Cost is O(n^2) time and n(n-1)/2 floats of memory (a packed lower triangle), which is the
- * deliberate trade: a few thousand faces is a few tens of MB and a fraction of the scan's decode
- * cost. Merges use the Lance-Williams update, so the matrix is maintained rather than recomputed.
+ * Cost is O(n^2) time and exactly one packed lower triangle of `n(n-1)/2` **unboxed** floats — 2,000
+ * faces is 8 MB, 12,000 is 288 MB, so the quadratic term is the real ceiling on library size and
+ * sharding is the eventual answer, not a smaller constant. Merges use the Lance-Williams update, so
+ * the matrix is maintained rather than recomputed, and nothing else materialises a second copy (see
+ * [ThresholdRule], whose distances are lazily produced precisely so the shipped rule allocates none).
  *
  * ## Rescan preserves named people
  * A scan is a *full* recluster, but a name is the one thing the user authored, so it must survive.
@@ -37,16 +39,24 @@ object FaceClusterer {
     const val DEFAULT_DISTANCE_CUT = 1f - DEFAULT_COSINE_SIMILARITY
 
     /**
-     * Chooses the cosine-distance cut below which two clusters may merge, given every pairwise
-     * distance in the scan. Shaped exactly like
-     * [com.vishalgupta.photoselector.domain.grouping.SimilarityGrouper.ThresholdRule] so a future
-     * adaptive rule slots in without touching a caller.
+     * Chooses the cosine-distance cut below which two clusters may merge. Same role as
+     * [com.vishalgupta.photoselector.domain.grouping.SimilarityGrouper.ThresholdRule], so a future
+     * adaptive rule slots in without touching a caller — but note the difference in *cost*: that one
+     * sees only adjacent-pair cosines (O(n)), while a face rule would need the full pairwise
+     * distribution (O(n^2)).
+     *
+     * Which is why the argument is a **lazy producer of a packed `FloatArray`**, not a materialised
+     * collection. 12,000 faces (a 4,000-photo wedding at ~3 faces each) is 72M distances: as a boxed
+     * `List<Float>` that is well over a gigabyte of `java.lang.Float`, allocated and thrown away, for
+     * a rule that may not look at it at all. The shipped [fixed] rule never invokes the producer, so
+     * it costs nothing; a future adaptive rule pays only when it actually wants the distribution.
+     * The array is the packed lower triangle — `distance(i, j)` for `i > j` at `i*(i-1)/2 + j`.
      */
     fun interface ThresholdRule {
-        fun cut(pairwiseDistances: List<Float>): Float
+        fun cut(pairwiseDistances: () -> FloatArray): Float
     }
 
-    /** Constant cut derived from a cosine *similarity*; the shipped default. */
+    /** Constant cut derived from a cosine *similarity*; the shipped default. Reads no distances. */
     fun fixed(similarity: Float = DEFAULT_COSINE_SIMILARITY): ThresholdRule =
         ThresholdRule { 1f - similarity }
 
@@ -72,7 +82,8 @@ object FaceClusterer {
         val named = known.filter { it.isNamed }
         if (embedded.isEmpty()) return named.map { it.copy(faces = emptyList()) }
 
-        val cut = rule.cut(pairwiseDistances(embedded, embeddings))
+        // Lazily produced: [fixed] never asks, so nothing O(n^2) is allocated on the shipped path.
+        val cut = rule.cut { packedDistances(embedded, embeddings) }
 
         // Phase 1 - re-match onto named centroids, so a rename survives a rescan.
         val namedCentroids = named.map { it to it.centroidEmbedding() }
@@ -118,13 +129,20 @@ object FaceClusterer {
         return preserved + discovered
     }
 
-    /** Every pairwise cosine distance among [faces], for a [ThresholdRule] to reason over. */
-    fun pairwiseDistances(faces: List<FaceId>, embeddings: Map<FaceId, FaceEmbedding>): List<Float> {
+    /**
+     * Every pairwise cosine distance among [faces] as one packed lower triangle — `distance(i, j)`
+     * for `i > j` at `i*(i-1)/2 + j`. The shape [agglomerate] works over and the shape a
+     * [ThresholdRule] is handed. Unboxed and allocated once: `n(n-1)/2` floats, so 12,000 faces is
+     * ~288 MB. Only build it when something actually needs it.
+     */
+    fun packedDistances(faces: List<FaceId>, embeddings: Map<FaceId, FaceEmbedding>): FloatArray {
         val vectors = faces.mapNotNull { embeddings[it] }
-        if (vectors.size < 2) return emptyList()
-        val out = ArrayList<Float>(vectors.size * (vectors.size - 1) / 2)
-        for (i in 1 until vectors.size) {
-            for (j in 0 until i) out += vectors[i].cosineDistanceTo(vectors[j])
+        val n = vectors.size
+        if (n < 2) return FloatArray(0)
+        val out = FloatArray(n * (n - 1) / 2)
+        for (i in 1 until n) {
+            val base = i * (i - 1) / 2
+            for (j in 0 until i) out[base + j] = vectors[i].cosineDistanceTo(vectors[j])
         }
         return out
     }
@@ -158,8 +176,14 @@ object FaceClusterer {
      * matrix maintained by the Lance-Williams update. The naive "rescan the whole matrix for the
      * global minimum on every merge" loop is O(n^3), which a few thousand faces would make
      * unusable; NN-chain gets the identical dendrogram in O(n^2) because average linkage is a
-     * *reducible* criterion (Mullner 2011). Reducibility also means merge heights never invert, so
-     * cutting the dendrogram at [cut] is the same thing as having stopped merging there.
+     * *reducible* criterion (Mullner 2011). Reducibility is also why cutting the finished dendrogram
+     * at [cut] is the same thing as having stopped merging there: no merge can be cheaper than one
+     * beneath it in the tree, so a skipped merge never has an applied merge in its subtree. The
+     * merges are then applied through union-find, which is **order-independent** — do not rely on
+     * the order NN-chain happens to emit them in.
+     *
+     * `FaceClustererTest` pins this against a naive repeated-global-min implementation, since "same
+     * answer, better complexity" is the entire justification for using NN-chain here.
      */
     private fun agglomerate(
         faces: List<FaceId>,
@@ -170,13 +194,7 @@ object FaceClusterer {
         if (n == 0) return emptyList()
         if (n == 1) return listOf(listOf(faces[0]))
 
-        // Lower triangle, row-major: distance(i, j) for i > j lives at i*(i-1)/2 + j.
-        val distances = FloatArray(n * (n - 1) / 2)
-        for (i in 1 until n) {
-            val vi = embeddings.getValue(faces[i])
-            val base = i * (i - 1) / 2
-            for (j in 0 until i) distances[base + j] = vi.cosineDistanceTo(embeddings.getValue(faces[j]))
-        }
+        val distances = packedDistances(faces, embeddings)
 
         fun distanceAt(i: Int, j: Int): Float =
             if (i > j) distances[i * (i - 1) / 2 + j] else distances[j * (j - 1) / 2 + i]
@@ -190,7 +208,8 @@ object FaceClusterer {
         val chain = IntArray(n)
         var chainLength = 0
         var liveCount = n
-        // (survivor, absorbed, height) in merge order; heights are non-decreasing.
+        // (survivor, absorbed, height). Emission order is NN-chain's, not sorted by height - the
+        // union-find cut below is order-independent, so it doesn't matter.
         val merges = ArrayList<Triple<Int, Int, Float>>(n - 1)
 
         while (liveCount > 1) {

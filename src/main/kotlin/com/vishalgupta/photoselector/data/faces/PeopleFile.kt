@@ -47,13 +47,14 @@ object PeopleFile {
 
     fun decode(json: Json, text: String): List<StoredPerson> {
         val root = json.parseToJsonElement(text).jsonObject
-        // Peeked for forward-compatibility; v1 is the only shape today.
+        // v1 is the only shape today, and a future v2 must NOT be read as one: people are derived
+        // data, so degrading to "none yet" costs at most a rescan, whereas mis-decoding a newer file
+        // and rewriting it as v1 would destroy whatever that version added.
         val version = root["version"]?.jsonPrimitive?.intOrNull ?: VERSION
-        return when (version) {
-            else -> (root["people"] as? JsonArray).orEmpty().map { element ->
-                val obj = element.jsonObject
-                StoredPerson(json.decodeFromJsonElement(PersonDto.serializer(), obj), obj)
-            }
+        if (version != VERSION) return emptyList()
+        return (root["people"] as? JsonArray).orEmpty().map { element ->
+            val obj = element.jsonObject
+            StoredPerson(json.decodeFromJsonElement(PersonDto.serializer(), obj), obj)
         }
     }
 

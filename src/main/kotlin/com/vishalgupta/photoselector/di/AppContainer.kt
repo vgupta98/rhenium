@@ -290,7 +290,15 @@ class AppContainer {
                 // "What is RAW" has one source of truth — the RAW decoder's extension set (the object is
                 // available regardless of platform; only its decoder registration is macOS-gated).
                 RawFilesResolver(RawDecoder.Companion.RawFormat.extensions),
-                PersonCategoryRuleResolver(photosOf = { peopleRepository.photosOf(it) }),
+                // The people index is per root, and the categories repository only ever resolves
+                // against the *scanned* root — so hand the lookup that root, which binds the people
+                // repository on demand. With no scanned root there is no authoritative answer, and
+                // the resolver must say so (null) rather than report "no photos": see
+                // PersonCategoryRuleResolver, a wrong empty answer prunes the user's pins/excludes
+                // off disk.
+                PersonCategoryRuleResolver(
+                    photosOf = { personId -> scannedRoot?.let { peopleRepository.photosOf(it, personId) } },
+                ),
             ),
             // The async rule pass rides the app scope and is cancelled per root via clearContext (in reset).
             scope = appScope,

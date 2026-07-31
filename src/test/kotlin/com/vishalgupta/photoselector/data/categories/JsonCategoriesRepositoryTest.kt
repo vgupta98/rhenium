@@ -61,7 +61,11 @@ class JsonCategoriesRepositoryTest {
     /** Records every category the repository disposes of, so the person-delete hook is assertable. */
     private val deletedCategories = mutableListOf<Category>()
 
-    /** Photos per person, standing in for the people repository's lookup. */
+    /**
+     * Photos per person, standing in for the people repository's lookup. A **missing** key means the
+     * index cannot answer for that person (unbound root, no sidecar, unknown id) and the lookup
+     * returns null — which is a different thing from a present key mapping to an empty set.
+     */
     private var personPhotos: Map<PersonId, Set<PhotoId>> = emptyMap()
 
     /**
@@ -77,7 +81,7 @@ class JsonCategoriesRepositoryTest {
             scannedPhotos = { scanned },
             ruleResolver = CompositeCategoryRuleResolver(
                 rawResolver,
-                PersonCategoryRuleResolver(photosOf = { personPhotos[it].orEmpty() }),
+                PersonCategoryRuleResolver(photosOf = { personPhotos[it] }),
             ),
             scope = resolverScope,
             idGenerator = { CategoryId("cat-${counter++}") },
@@ -572,12 +576,43 @@ class JsonCategoriesRepositoryTest {
     }
 
     @Test
-    fun person_anUnknownPersonResolvesEmptyRatherThanFailing() = runTest {
-        personPhotos = emptyMap()
+    fun person_aPersonWithNoPhotosResolvesEmptyRatherThanFailing() = runTest {
+        // Present in the index, appears in nothing: an authoritative empty answer.
+        personPhotos = mapOf(PersonId("nobody") to emptySet())
         val (repo, root) = repo(scan())
 
         val id = personCategory(repo, root, personId = "nobody")
 
         assertEquals(emptySet<PhotoId>(), membersOf(repo, root, id))
+    }
+
+    @Test
+    fun person_anUnavailablePeopleIndexNeverPrunesTheUsersOverrides() = runTest {
+        // The destructive path: if a rule that CANNOT be resolved is reported as "matched nothing",
+        // every stored pin looks redundant and every stored exclude looks stale, so the prune pass
+        // rewrites the file without them and the user's corrections are gone for good.
+        personPhotos = mapOf(PersonId("alice") to setOf(PhotoId("a.jpg"), PhotoId("b.jpg")))
+        val (repo, root) = repo(scan())
+        val id = personCategory(repo, root)
+        repo.toggleMembership(root, id, PhotoId("b.jpg")) // exclude: "that isn't Alice"
+        repo.toggleMembership(root, id, PhotoId("c.jpg")) // pin: "Alice is in this one too"
+        assertEquals(setOf(PhotoId("a.jpg"), PhotoId("c.jpg")), membersOf(repo, root, id))
+
+        // Relaunch with the people index unable to answer (no sidecar yet, or a scan not run).
+        personPhotos = emptyMap()
+        val (reopened, _) = repo(scan())
+        // Pins still show; nothing is claimed to match, so no rule membership is invented.
+        assertEquals(setOf(PhotoId("c.jpg")), membersOf(reopened, root, id))
+        awaitResolution()
+
+        val written = Files.readString(root.categoriesFile)
+        assertTrue("the exclude must survive an unresolvable rule", written.contains("\"b.jpg\""))
+        assertTrue("the pin must survive an unresolvable rule", written.contains("\"c.jpg\""))
+
+        // And once the index can answer again, the original membership comes straight back.
+        personPhotos = mapOf(PersonId("alice") to setOf(PhotoId("a.jpg"), PhotoId("b.jpg")))
+        val (restored, _) = repo(scan())
+        awaitResolution()
+        assertEquals(setOf(PhotoId("a.jpg"), PhotoId("c.jpg")), membersOf(restored, root, id))
     }
 }

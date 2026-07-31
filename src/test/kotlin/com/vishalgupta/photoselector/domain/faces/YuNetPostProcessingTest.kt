@@ -1,5 +1,7 @@
 package com.vishalgupta.photoselector.domain.faces
 
+import com.vishalgupta.photoselector.domain.model.DecodedImage
+import com.vishalgupta.photoselector.testing.ImageFixtures
 import kotlin.math.ln
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -196,6 +198,116 @@ class YuNetPostProcessingTest {
         assertEquals(0.5f, d.box.width, 1e-5f)
         assertEquals(0.40f, d.box.height, 1e-5f)
         assertEquals(0.20f, d.landmarks[0].y, 1e-5f)
+    }
+
+    /**
+     * The round trip is what actually matters and neither half proves it alone: `unletterbox` can be
+     * arithmetically perfect while `letterbox` writes the pixels somewhere else entirely, and the
+     * result is plausible-looking boxes that are quietly offset — with no UI in this PR to eyeball.
+     *
+     * So: paint a bright rectangle at a known place in a synthetic image, letterbox it, find where
+     * the rectangle actually landed **on the canvas**, and push those canvas coordinates back through
+     * `unletterbox`. They must come out on the original rectangle.
+     */
+    @Test
+    fun letterboxThenUnletterbox_returnsADetectionToWhereItStarted() {
+        // Run at the production canvas size: the tolerance below is in *canvas* pixels, and a small
+        // canvas would quantise the marker so coarsely the test proves nothing.
+        val canvasEdge = YuNetPostProcessing.INPUT_EDGE
+        for ((w, h) in listOf(400 to 200, 200 to 400, 256 to 256, 333 to 97)) {
+            // The painted rectangle snaps to whole source pixels, so compare against where it
+            // actually landed rather than the request - otherwise the test measures rounding, not
+            // the round trip.
+            val (image, marker) = imageWithBrightRect(w, h, FaceBox(0.30f, 0.40f, 0.20f, 0.15f))
+
+            val canvas = YuNetPostProcessing.letterbox(image, inputEdge = canvasEdge)
+            val onCanvas = brightBoundsOnCanvas(canvas.planarBgr, canvasEdge)
+
+            val recovered = YuNetPostProcessing.unletterbox(
+                listOf(det(onCanvas.x, onCanvas.y, onCanvas.width, onCanvas.height, score = 0.9f)),
+                canvas.usedWidth,
+                canvas.usedHeight,
+            ).single()
+
+            // Two canvas pixels of slack: the canvas is a resample, so the rectangle's measured edges
+            // can land a pixel either way. Expressed back in source-normalised units.
+            val tolX = 2f / (canvas.usedWidth * canvasEdge)
+            val tolY = 2f / (canvas.usedHeight * canvasEdge)
+            val where = "${w}x$h"
+            assertEquals(marker.x, recovered.box.x, tolX, "$where x")
+            assertEquals(marker.y, recovered.box.y, tolY, "$where y")
+            assertEquals(marker.width, recovered.box.width, 2 * tolX, "$where width")
+            assertEquals(marker.height, recovered.box.height, 2 * tolY, "$where height")
+        }
+    }
+
+    @Test
+    fun letterbox_preservesAspectRatioAndLeavesTheRestBlack() {
+        // A 2:1 image fills the canvas width and half its height; the bottom half stays padding.
+        val canvas = YuNetPostProcessing.letterbox(ImageFixtures.solid(400, 200, 255, 255, 255), edge)
+
+        assertEquals(1f, canvas.usedWidth, 1f / edge)
+        assertEquals(0.5f, canvas.usedHeight, 1f / edge)
+        // Top-left is image, bottom-right is padding - the image sits at the canvas origin.
+        assertTrue(canvas.planarBgr[0] > 200f, "the image must start at the canvas origin")
+        assertEquals(0f, canvas.planarBgr[edge * edge - 1], "the far corner must be padding")
+    }
+
+    @Test
+    fun letterbox_ofADegenerateImageIsBlankRatherThanACrash() {
+        val canvas = YuNetPostProcessing.letterbox(ImageFixtures.solid(0, 0), edge)
+
+        assertEquals(0f, canvas.usedWidth)
+        assertEquals(0f, canvas.usedHeight)
+        assertTrue(canvas.planarBgr.all { it == 0f })
+    }
+
+    /** A black image with [rect] (normalised) painted white, plus the box it *actually* covers. */
+    private fun imageWithBrightRect(width: Int, height: Int, rect: FaceBox): Pair<DecodedImage, FaceBox> {
+        val bytes = ByteArray(width * height * 4)
+        val x0 = (rect.x * width).toInt()
+        val y0 = (rect.y * height).toInt()
+        val x1 = ((rect.x + rect.width) * width).toInt()
+        val y1 = ((rect.y + rect.height) * height).toInt()
+        for (y in 0 until height) {
+            for (x in 0 until width) {
+                val i = (y * width + x) * 4
+                val on = x in x0 until x1 && y in y0 until y1
+                val v = if (on) 255.toByte() else 0
+                bytes[i] = v
+                bytes[i + 1] = v
+                bytes[i + 2] = v
+                bytes[i + 3] = 255.toByte()
+            }
+        }
+        val painted = FaceBox(
+            x = x0.toFloat() / width,
+            y = y0.toFloat() / height,
+            width = (x1 - x0).toFloat() / width,
+            height = (y1 - y0).toFloat() / height,
+        )
+        return DecodedImage(width = width, height = height, bgraBytes = bytes) to painted
+    }
+
+    /** Bounding box (canvas-normalised) of the bright pixels in a CHW canvas — the blue plane suffices. */
+    private fun brightBoundsOnCanvas(planar: FloatArray, canvasEdge: Int): FaceBox {
+        var minX = canvasEdge
+        var minY = canvasEdge
+        var maxX = -1
+        var maxY = -1
+        for (y in 0 until canvasEdge) {
+            for (x in 0 until canvasEdge) {
+                if (planar[y * canvasEdge + x] > 128f) {
+                    if (x < minX) minX = x
+                    if (y < minY) minY = y
+                    if (x > maxX) maxX = x
+                    if (y > maxY) maxY = y
+                }
+            }
+        }
+        assertTrue(maxX >= 0, "expected the marker rectangle to survive the letterbox")
+        val e = canvasEdge.toFloat()
+        return FaceBox(minX / e, minY / e, (maxX - minX + 1) / e, (maxY - minY + 1) / e)
     }
 
     @Test

@@ -140,6 +140,42 @@ class FaceClustererTest {
     }
 
     @Test
+    fun theShippedRuleNeverMaterialisesThePairwiseDistances() {
+        // The full pairwise triangle is O(n^2) - 12,000 faces is ~288 MB - so a rule that doesn't
+        // read it must never cause it to be built. The producer is lazy for exactly this reason.
+        var produced = 0
+        val counting = FaceClusterer.ThresholdRule { distances ->
+            FaceClusterer.fixed(0.7f).cut { produced++; distances() }
+        }
+
+        FaceClusterer.cluster(
+            faces = listOf(face("a"), face("b"), face("c")),
+            embeddings = mapOf(face("a") to vec(0.0), face("b") to vec(1.0), face("c") to vec(90.0)),
+            rule = counting,
+            newPersonId = ids,
+        )
+
+        assertEquals(0, produced, "fixed() must not touch the pairwise distances")
+    }
+
+    @Test
+    fun packedDistancesIsTheLowerTriangleInIndexOrder() {
+        val a = face("a")
+        val b = face("b")
+        val c = face("c")
+        val embeddings = mapOf(a to vec(0.0), b to vec(90.0), c to vec(180.0))
+
+        val packed = FaceClusterer.packedDistances(listOf(a, b, c), embeddings)
+
+        // distance(i, j) for i > j lives at i*(i-1)/2 + j: [ (1,0), (2,0), (2,1) ].
+        assertEquals(3, packed.size)
+        assertEquals(1f, packed[0], 1e-4f) // cos 90  -> 1 - 0
+        assertEquals(2f, packed[1], 1e-4f) // cos 180 -> 1 - (-1)
+        assertEquals(1f, packed[2], 1e-4f)
+        assertEquals(0, FaceClusterer.packedDistances(listOf(a), embeddings).size)
+    }
+
+    @Test
     fun centroidIsTheRenormalisedMeanOfTheClustersEmbeddings() {
         val a = face("a")
         val b = face("b")
@@ -148,6 +184,76 @@ class FaceClustererTest {
         val expected = (sqrt(0.5)).toFloat()
         assertEquals(expected, centroid[0], 1e-4f)
         assertEquals(expected, centroid[1], 1e-4f)
+    }
+
+    /**
+     * The NN-chain implementation must agree *exactly* with the textbook "repeatedly merge the
+     * globally closest pair" average-linkage algorithm — "same answer, better complexity" is the
+     * entire justification for using it, and nothing else in the repo would catch a subtly wrong
+     * chain/Lance-Williams/threshold-cut interaction.
+     *
+     * Randomised over many shapes and cuts. The reference below is deliberately the naive O(n^3)
+     * version, written straight from the definition.
+     */
+    @Test
+    fun nnChainAgreesWithANaiveAverageLinkageReference() {
+        val random = java.util.Random(20260801L)
+
+        repeat(200) { trial ->
+            val n = 2 + random.nextInt(14)
+            val faces = List(n) { face("f$it") }
+            // Vectors on the unit circle: the whole distance range 0..2 is reachable, and clusters
+            // are easy to eyeball if a trial ever fails.
+            val embeddings = faces.associateWith { vec(random.nextDouble() * 360.0) }
+            val cut = random.nextFloat() * 1.6f
+
+            counter = 0
+            val actual = FaceClusterer.cluster(
+                faces = faces,
+                embeddings = embeddings,
+                rule = FaceClusterer.ThresholdRule { cut },
+                newPersonId = ids,
+            ).map { it.faces.toSet() }.toSet()
+
+            val expected = naiveAverageLinkage(faces, embeddings, cut)
+
+            assertEquals(expected, actual, "trial $trial (n=$n, cut=$cut) diverged from the reference")
+        }
+    }
+
+    /** Textbook average linkage: merge the globally closest pair while it is within [cut]. O(n^3). */
+    private fun naiveAverageLinkage(
+        faces: List<FaceId>,
+        embeddings: Map<FaceId, FaceEmbedding>,
+        cut: Float,
+    ): Set<Set<FaceId>> {
+        val clusters = faces.map { mutableSetOf(it) }.toMutableList()
+
+        fun linkage(a: Set<FaceId>, b: Set<FaceId>): Float {
+            var sum = 0f
+            for (x in a) for (y in b) sum += embeddings.getValue(x).cosineDistanceTo(embeddings.getValue(y))
+            return sum / (a.size * b.size)
+        }
+
+        while (clusters.size > 1) {
+            var bestI = -1
+            var bestJ = -1
+            var best = Float.MAX_VALUE
+            for (i in clusters.indices) {
+                for (j in 0 until i) {
+                    val d = linkage(clusters[i], clusters[j])
+                    if (d < best) {
+                        best = d
+                        bestI = i
+                        bestJ = j
+                    }
+                }
+            }
+            if (bestI < 0 || best > cut) break
+            clusters[bestJ].addAll(clusters[bestI])
+            clusters.removeAt(bestI)
+        }
+        return clusters.map { it.toSet() }.toSet()
     }
 
     @Test

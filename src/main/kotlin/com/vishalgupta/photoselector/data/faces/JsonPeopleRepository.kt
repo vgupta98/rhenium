@@ -86,8 +86,13 @@ class JsonPeopleRepository(
         }
     }
 
-    override fun photosOf(id: PersonId): Set<PhotoId> =
-        peopleFlow.value.firstOrNull { it.id == id }?.photos.orEmpty()
+    override fun photosOf(root: RootFolder, id: PersonId): Set<PhotoId>? {
+        // Binds on demand, exactly like observePeople - the rule pass is the first thing that ever
+        // asks about people, and an unbound repository answering "no photos" would let the
+        // categories repository prune the user's pins/excludes away (see PeopleRepository.photosOf).
+        if (boundRoot?.path != root.path) bind(root)
+        return peopleFlow.value.firstOrNull { it.id == id }?.photos
+    }
 
     override suspend fun clearContext() {
         mutex.withLock {

@@ -101,10 +101,34 @@ class JsonPeopleRepositoryTest {
     @Test
     fun photosOfIsTheLookupThePersonRuleResolves() = runTest {
         val (repo, root) = repo()
-        repo.replaceAll(root, listOf(person("p1", photos = listOf("a", "b", "a"))))
+        repo.replaceAll(root, listOf(person("p1", photos = listOf("a", "b", "a")), person("p2", photos = emptyList())))
 
-        assertEquals(setOf(PhotoId("a"), PhotoId("b")), repo.photosOf(PersonId("p1")))
-        assertEquals(emptySet(), repo.photosOf(PersonId("unknown")))
+        assertEquals(setOf(PhotoId("a"), PhotoId("b")), repo.photosOf(root, PersonId("p1")))
+        // A person who exists but appears in nothing is an authoritative EMPTY answer...
+        assertEquals(emptySet(), repo.photosOf(root, PersonId("p2")))
+        // ...while a person this root has never heard of is "can't answer": null, never empty. The
+        // categories repository prunes stored pins/excludes against a match set, so conflating the
+        // two would delete the user's corrections from disk.
+        assertEquals(null, repo.photosOf(root, PersonId("unknown")))
+    }
+
+    @Test
+    fun photosOfBindsTheRootItself_soNothingHasToObserveFirst() = runTest {
+        // The lookup is the *first* thing that touches this repository in production - the categories
+        // rule pass calls it. Before this bound on demand, it answered from an empty flow for every
+        // root, which is exactly the answer that prunes a user's overrides away.
+        val (writer, root) = repo()
+        writer.replaceAll(root, listOf(person("p1", name = "Alice", photos = listOf("a"))))
+
+        val (fresh, _) = repo()
+        assertEquals(setOf(PhotoId("a")), fresh.photosOf(root, PersonId("p1")))
+    }
+
+    @Test
+    fun photosOfOnARootWithNoSidecarCannotAnswer() = runTest {
+        val (repo, root) = repo()
+
+        assertEquals(null, repo.photosOf(root, PersonId("p1")))
     }
 
     @Test
@@ -154,6 +178,8 @@ class JsonPeopleRepositoryTest {
 
         repo.clearContext()
 
-        assertEquals(emptySet(), repo.photosOf(PersonId("p1")))
+        // Unbound again - but photosOf re-binds on demand, so the answer stays correct rather than
+        // silently becoming "no photos" for the next root that asks.
+        assertEquals(setOf(PhotoId("a")), repo.photosOf(root, PersonId("p1")))
     }
 }

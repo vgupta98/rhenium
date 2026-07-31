@@ -352,23 +352,31 @@ class JsonCategoriesRepository(
      * flow and prunes now-redundant overrides (a pin the rule now matches; an exclude for a photo the
      * rule no longer matches). Decoupled from bind like the Similarity pass — for the RAW rule it is
      * effectively instant. A stale pass (root changed underneath it) bails on the boundRoot check.
+     *
+     * **A rule no resolver claims is skipped entirely, not treated as "matched nothing".** The null
+     * from [CategoryRuleResolver.resolve] is meaningful: an empty match set makes every stored pin
+     * look redundant and every stored exclude look stale, so pruning against one we never actually
+     * computed would delete the user's manual corrections from disk on the next rewrite. An unclaimed
+     * category keeps its previous [ruleMatches] (none, at bind), shows its pins, and is left out of
+     * the prune — the same "carried through untouched" treatment an unknown DTO rule type gets.
      */
     private fun launchRuleResolution(root: RootFolder, scanned: List<Photo>) {
         val smart = categoriesFlow.value.filter { it.kind == CategoryKind.SMART && it.rule != null }
         if (smart.isEmpty()) return
         resolveJob?.cancel()
         resolveJob = scope.launch {
-            // A rule no resolver claims yields null; treat it as "no natural matches" so the category
-            // still shows its pins and its stored rule survives the next rewrite untouched.
-            val computed = smart.associate { it.id to ruleResolver.resolve(it.rule!!, scanned).orEmpty() }
+            val computed = smart.mapNotNull { category ->
+                ruleResolver.resolve(category.rule!!, scanned)?.let { category.id to it }
+            }.toMap()
             mutex.withLock {
                 if (boundRoot?.path != root.path) return@withLock
-                ruleMatches = computed
+                // Only overwrite what was actually resolved; an unclaimed category keeps what it had.
+                ruleMatches = ruleMatches + computed
                 var overridesChanged = false
                 val prunedPins = pins.toMutableMap()
                 val prunedExcludes = excludes.toMutableMap()
                 for (cat in smart) {
-                    val matches = computed[cat.id].orEmpty()
+                    val matches = computed[cat.id] ?: continue // unclaimed - never prune against a guess
                     val p = pins[cat.id].orEmpty()
                     val keptPins = p - matches // a pin the rule now matches is redundant
                     if (keptPins != p) { prunedPins[cat.id] = keptPins; overridesChanged = true }

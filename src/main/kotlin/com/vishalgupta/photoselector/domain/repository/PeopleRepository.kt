@@ -14,7 +14,7 @@ import kotlinx.coroutines.flow.StateFlow
  * once ([replaceAll]), while [rename] is the single user-authored edit. Everything else is derived
  * and may be recomputed at any time.
  *
- * [photosOf] is deliberately a plain, non-suspending read over the bound root: it is the lookup a
+ * [photosOf] is deliberately a plain, non-suspending read: it is the lookup a
  * [com.vishalgupta.photoselector.domain.faces.PersonCategoryRuleResolver] is injected with, and the
  * categories repository already resolves rules on its own off-thread pass.
  */
@@ -31,8 +31,18 @@ interface PeopleRepository {
     /** Forgets a person entirely. Called when their category is deleted, so the two never drift. */
     suspend fun delete(root: RootFolder, id: PersonId)
 
-    /** Photos [id] appears in, over the currently bound root; empty for an unknown id. */
-    fun photosOf(id: PersonId): Set<PhotoId>
+    /**
+     * Photos [id] appears in within [root], binding to it on demand (like [observePeople]), or
+     * **null** when [root] has no such person.
+     *
+     * The null is load-bearing and must not be flattened to an empty set. A person category's
+     * membership is `(ruleMatches ∪ pins) \ excludes`, and the categories repository *prunes* stored
+     * overrides against `ruleMatches` — so answering "matches nothing" for a person we simply cannot
+     * resolve would delete the user's manual pins and excludes from disk. "This root has never heard
+     * of that person" is not the same answer as "that person is in no photos", and only the second
+     * is authoritative enough to prune against.
+     */
+    fun photosOf(root: RootFolder, id: PersonId): Set<PhotoId>?
 
     suspend fun clearContext()
 }

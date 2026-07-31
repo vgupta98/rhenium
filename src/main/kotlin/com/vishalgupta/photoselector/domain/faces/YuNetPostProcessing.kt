@@ -1,5 +1,6 @@
 package com.vishalgupta.photoselector.domain.faces
 
+import com.vishalgupta.photoselector.domain.model.DecodedImage
 import kotlin.math.exp
 import kotlin.math.max
 import kotlin.math.min
@@ -163,11 +164,78 @@ object YuNetPostProcessing {
         return if (union <= 0f) 0f else overlap / union
     }
 
+    private fun u8(b: Byte): Float = (b.toInt() and 0xFF).toFloat()
+
+    private fun lerp(a: Float, b: Float, t: Float): Float = a + (b - a) * t
+
+    /** A source image resampled into the network's square canvas, plus what [unletterbox] needs to undo it. */
+    class Letterboxed(
+        /** CHW float buffer in **BGR** channel order, values 0..255. */
+        val planarBgr: FloatArray,
+        /** Fraction of the canvas width the image occupies; the rest is padding. */
+        val usedWidth: Float,
+        /** Fraction of the canvas height the image occupies; the rest is padding. */
+        val usedHeight: Float,
+    )
+
     /**
-     * Maps canvas-normalised detections back onto the source image. The detector letterboxes the
-     * source into the top-left of the square canvas preserving aspect ratio (OpenCV pads right and
-     * bottom, so the origin is shared), leaving [usedWidth]/[usedHeight] — the fraction of the canvas
-     * the image actually occupies — as the only correction needed: divide through, then clamp.
+     * Bilinear-resizes [image] (BGRA) into the **top-left** of an [inputEdge]-square canvas, aspect
+     * ratio preserved, the remainder left black — matching OpenCV's `copyMakeBorder(0, bottom, 0,
+     * right)`, so the two share an origin and [unletterbox] is a pure divide. Squashing to the square
+     * instead would distort every face, and the landmarks feed a similarity transform that assumes
+     * true proportions.
+     *
+     * Lives here, next to its inverse, on purpose: the occupied-fraction arithmetic is the *one*
+     * thing both halves must agree on, and splitting it across the ONNX wrapper and this object is
+     * how a silently-offset box gets shipped. Keeping them together also makes the round trip
+     * testable with no model present.
+     */
+    fun letterbox(image: DecodedImage, inputEdge: Int = INPUT_EDGE): Letterboxed {
+        val w = image.width
+        val h = image.height
+        val out = FloatArray(3 * inputEdge * inputEdge)
+        if (w <= 0 || h <= 0) return Letterboxed(out, 0f, 0f)
+
+        val scale = minOf(inputEdge.toFloat() / w, inputEdge.toFloat() / h)
+        // The filled region is whole pixels, and unletterbox divides by THIS, not by the exact
+        // scale*w - otherwise the two disagree by up to a pixel at the canvas edge.
+        val usedW = Math.round(w * scale).coerceIn(1, inputEdge)
+        val usedH = Math.round(h * scale).coerceIn(1, inputEdge)
+        val plane = inputEdge * inputEdge
+        val src = image.bgraBytes
+
+        for (oy in 0 until usedH) {
+            // Pixel-centre mapping, clamped - the convention used across the app's resamplers.
+            val sy = ((oy + 0.5f) / scale - 0.5f).coerceIn(0f, (h - 1).toFloat())
+            val y0 = sy.toInt()
+            val y1 = (y0 + 1).coerceAtMost(h - 1)
+            val wy = sy - y0
+            for (ox in 0 until usedW) {
+                val sx = ((ox + 0.5f) / scale - 0.5f).coerceIn(0f, (w - 1).toFloat())
+                val x0 = sx.toInt()
+                val x1 = (x0 + 1).coerceAtMost(w - 1)
+                val wx = sx - x0
+
+                val i00 = (y0 * w + x0) * 4
+                val i01 = (y0 * w + x1) * 4
+                val i10 = (y1 * w + x0) * 4
+                val i11 = (y1 * w + x1) * 4
+                val o = oy * inputEdge + ox
+                // Source is BGRA and the network wants BGR, so the channel index carries straight over.
+                for (c in 0 until 3) {
+                    val top = lerp(u8(src[i00 + c]), u8(src[i01 + c]), wx)
+                    val bottom = lerp(u8(src[i10 + c]), u8(src[i11 + c]), wx)
+                    out[c * plane + o] = lerp(top, bottom, wy)
+                }
+            }
+        }
+        return Letterboxed(out, usedW.toFloat() / inputEdge, usedH.toFloat() / inputEdge)
+    }
+
+    /**
+     * Maps canvas-normalised detections back onto the source image — the inverse of [letterbox].
+     * Since the image sits at the canvas origin, [usedWidth]/[usedHeight] (the fraction of the canvas
+     * it occupies) are the only correction needed: divide through.
      *
      * Detections whose box lands entirely in the padding (a spurious hit on black) are dropped.
      */
