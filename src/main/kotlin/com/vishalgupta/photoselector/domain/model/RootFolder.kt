@@ -11,11 +11,14 @@ data class RootFolder(val path: Path) {
     val positionFile: Path get() = path.resolve(POSITION_FILE_NAME)
     /** Per-root persisted "keep RAW XMP sidecars in sync" toggle (see XmpSyncPreferences). */
     val xmpSyncFile: Path get() = path.resolve(XMP_SYNC_FILE_NAME)
+    /** Per-root people found by the face pipeline (see PeopleRepository). */
+    val peopleFile: Path get() = path.resolve(PEOPLE_FILE_NAME)
 
     companion object {
         const val CATEGORIES_FILE_NAME: String = ".photo-selector-categories.json"
         const val FAVOURITES_FILE_NAME: String = ".photo-selector-favourites.json"
         const val POSITION_FILE_NAME: String = ".photo-selector-position.json"
         const val XMP_SYNC_FILE_NAME: String = ".photo-selector-xmp-sync.json"
+        const val PEOPLE_FILE_NAME: String = ".photo-selector-people.json"
     }
 }

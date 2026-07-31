@@ -1,9 +1,13 @@
 package com.vishalgupta.photoselector.data.categories
 
 import com.vishalgupta.photoselector.data.format.RawDecoder
+import com.vishalgupta.photoselector.domain.faces.PersonCategoryRuleResolver
+import com.vishalgupta.photoselector.domain.faces.PersonId
 import com.vishalgupta.photoselector.domain.model.Category
 import com.vishalgupta.photoselector.domain.model.CategoryId
 import com.vishalgupta.photoselector.domain.model.CategoryKind
+import com.vishalgupta.photoselector.domain.model.CategoryRule
+import com.vishalgupta.photoselector.domain.model.CompositeCategoryRuleResolver
 import com.vishalgupta.photoselector.domain.model.Photo
 import com.vishalgupta.photoselector.domain.model.PhotoId
 import com.vishalgupta.photoselector.domain.model.RawFilesResolver
@@ -54,16 +58,30 @@ class JsonCategoriesRepositoryTest {
         lastModifiedEpochMs = mtime,
     )
 
-    /** A repository whose generated ids are deterministic (cat-0, cat-1, …) for assertions. */
+    /** Records every category the repository disposes of, so the person-delete hook is assertable. */
+    private val deletedCategories = mutableListOf<Category>()
+
+    /** Photos per person, standing in for the people repository's lookup. */
+    private var personPhotos: Map<PersonId, Set<PhotoId>> = emptyMap()
+
+    /**
+     * A repository whose generated ids are deterministic (cat-0, cat-1, …) for assertions. Wired with
+     * the same *composite* resolver production uses, so the tests exercise the real chain rather than
+     * a single-resolver fork.
+     */
     private fun repo(scanned: List<Photo>): Pair<JsonCategoriesRepository, RootFolder> {
         val root = RootFolder(tmp.root.toPath())
         var counter = 0
         val repo = JsonCategoriesRepository(
             json = json,
             scannedPhotos = { scanned },
-            ruleResolver = rawResolver,
+            ruleResolver = CompositeCategoryRuleResolver(
+                rawResolver,
+                PersonCategoryRuleResolver(photosOf = { personPhotos[it].orEmpty() }),
+            ),
             scope = resolverScope,
             idGenerator = { CategoryId("cat-${counter++}") },
+            onCategoryDeleted = { _, category -> deletedCategories += category },
         )
         return repo to root
     }
@@ -445,5 +463,121 @@ class JsonCategoriesRepositoryTest {
 
         assertFailsWith<IllegalArgumentException> { repo.rename(root, Category.SMART_RAW_ID, "Nope") }
         assertFailsWith<IllegalArgumentException> { repo.delete(root, Category.SMART_RAW_ID) }
+    }
+
+    // --- Smart categories (a person) ---
+
+    // A function, not a field: `photo()` resolves against tmp.root, which the rule creates per test.
+    private fun scan() = listOf(photo("a.jpg", 1, 1), photo("b.jpg", 2, 2), photo("c.jpg", 3, 3))
+
+    private suspend fun personCategory(
+        repo: JsonCategoriesRepository,
+        root: RootFolder,
+        personId: String = "alice",
+    ): CategoryId = repo.create(root, "Alice", CategoryRule.Person(personId)).also { awaitResolution() }
+
+    private fun membersOf(repo: JsonCategoriesRepository, root: RootFolder, id: CategoryId): Set<PhotoId> =
+        repo.observeMemberships(root).value[id].orEmpty()
+
+    @Test
+    fun person_resolvesMembershipFromThePeopleLookup() = runTest {
+        personPhotos = mapOf(PersonId("alice") to setOf(PhotoId("a.jpg"), PhotoId("c.jpg")))
+        val (repo, root) = repo(scan())
+
+        val id = personCategory(repo, root)
+
+        assertEquals(CategoryKind.SMART, repo.observeCategories(root).value.first { it.id == id }.kind)
+        assertEquals(setOf(PhotoId("a.jpg"), PhotoId("c.jpg")), membersOf(repo, root, id))
+    }
+
+    @Test
+    fun person_survivesAReopenAsASmartCategory() = runTest {
+        personPhotos = mapOf(PersonId("alice") to setOf(PhotoId("a.jpg")))
+        val (repo, root) = repo(scan())
+        val id = personCategory(repo, root)
+
+        val (reopened, _) = repo(scan())
+        assertEquals(setOf(PhotoId("a.jpg")), membersOf(reopened, root, id))
+        val category = reopened.observeCategories(root).value.first { it.id == id }
+        assertEquals(CategoryKind.SMART, category.kind)
+        assertEquals(CategoryRule.Person("alice"), category.rule)
+        // Still v2 - the person rule is an additive field, not a schema generation.
+        assertTrue("still v2", Files.readString(root.categoriesFile).contains("\"version\": 2"))
+    }
+
+    @Test
+    fun person_excludeAndPinDeviateFromTheRule() = runTest {
+        personPhotos = mapOf(PersonId("alice") to setOf(PhotoId("a.jpg"), PhotoId("b.jpg")))
+        val (repo, root) = repo(scan())
+        val id = personCategory(repo, root)
+
+        // "That isn't actually Alice" -> an exclude.
+        assertFalse(repo.toggleMembership(root, id, PhotoId("b.jpg")))
+        // "Alice is in this one too" -> a pin.
+        assertTrue(repo.toggleMembership(root, id, PhotoId("c.jpg")))
+
+        assertEquals(setOf(PhotoId("a.jpg"), PhotoId("c.jpg")), membersOf(repo, root, id))
+
+        val (reopened, _) = repo(scan())
+        awaitResolution()
+        assertEquals(setOf(PhotoId("a.jpg"), PhotoId("c.jpg")), membersOf(reopened, root, id))
+    }
+
+    @Test
+    fun person_redundantOverridesArePrunedOnRescan() = runTest {
+        personPhotos = mapOf(PersonId("alice") to setOf(PhotoId("a.jpg"), PhotoId("b.jpg")))
+        val (repo, root) = repo(scan())
+        val id = personCategory(repo, root)
+        repo.toggleMembership(root, id, PhotoId("b.jpg")) // exclude b
+        repo.toggleMembership(root, id, PhotoId("c.jpg")) // pin c
+
+        // A later scan changes who Alice appears in: b is out anyway, c really is her.
+        personPhotos = mapOf(PersonId("alice") to setOf(PhotoId("a.jpg"), PhotoId("c.jpg")))
+        val (reopened, _) = repo(scan())
+        assertEquals(setOf(PhotoId("a.jpg"), PhotoId("c.jpg")), membersOf(reopened, root, id))
+
+        awaitResolution()
+        val rewritten = Files.readString(root.categoriesFile)
+        assertFalse("redundant pin must be pruned", rewritten.contains("\"c.jpg\""))
+        assertFalse("redundant exclude must be pruned", rewritten.contains("\"b.jpg\""))
+    }
+
+    @Test
+    fun person_canBeRenamedAndDeleted_unlikeASeededSmartCategory() = runTest {
+        personPhotos = mapOf(PersonId("alice") to setOf(PhotoId("a.jpg")))
+        val (repo, root) = repo(scan())
+        val id = personCategory(repo, root)
+
+        repo.rename(root, id, "Alice B")
+        assertEquals("Alice B", repo.observeCategories(root).value.first { it.id == id }.name)
+
+        repo.delete(root, id)
+        assertTrue(repo.observeCategories(root).value.none { it.id == id })
+
+        // The seeded smart category is still locked, so narrowing the guard didn't unlock it.
+        assertFailsWith<IllegalArgumentException> { repo.rename(root, Category.SMART_RAW_ID, "Nope") }
+        assertFailsWith<IllegalArgumentException> { repo.delete(root, Category.SMART_RAW_ID) }
+    }
+
+    @Test
+    fun person_deletingTheCategoryDisposesOfThePerson() = runTest {
+        // Or people leak: the person would stay in the sidecar with no way to reach them.
+        personPhotos = mapOf(PersonId("alice") to setOf(PhotoId("a.jpg")))
+        val (repo, root) = repo(scan())
+        val id = personCategory(repo, root)
+
+        repo.delete(root, id)
+
+        assertEquals(listOf(CategoryRule.Person("alice")), deletedCategories.map { it.rule })
+    }
+
+    @Test
+    fun person_anUnknownPersonResolvesEmptyRatherThanFailing() = runTest {
+        personPhotos = emptyMap()
+        val (repo, root) = repo(scan())
+
+        val id = personCategory(repo, root, personId = "nobody")
+
+        assertEquals(emptySet<PhotoId>(), membersOf(repo, root, id))
     }
 }

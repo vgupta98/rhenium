@@ -27,11 +27,21 @@ data class PhotoEntryDto(
  * A rule descriptor as persisted for a smart category. A bare [type] discriminator (not
  * kotlinx polymorphism) keeps the schema flat and additive: an unknown future [type] decodes to a
  * `CategoryRuleDto` the repository maps to `null` (treated as manual — safe), never a hard failure.
+ *
+ * Per-type parameters are additive nullable fields on this one flat object, decoded through
+ * `ignoreUnknownKeys` — so adding [personId] needed **no file version bump** (still v2), and an older
+ * build reading a person category simply falls down the unknown-rule path, which already carries
+ * `rule`/`excluded` through a rewrite untouched.
  */
 @Serializable
-data class CategoryRuleDto(val type: String) {
+data class CategoryRuleDto(
+    val type: String,
+    /** Set only when [type] is [PERSON]: the id of the person whose photos the category collects. */
+    val personId: String? = null,
+) {
     companion object {
         const val RAW_FILES = "raw-files"
+        const val PERSON = "person"
     }
 }
 

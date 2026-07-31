@@ -58,6 +58,25 @@ class EmbeddingCacheTest {
         assertNull(cache.get(photo("test", sizeBytes = 2000, mtime = 1000)))
     }
 
+    /**
+     * GOLDEN KEY - pinned deliberately. The exact on-disk path a known photo hashes to, so any change
+     * to key composition, hashing, truncation or sharding shows up as a failing test rather than as
+     * every user silently re-paying the minute-long cold embedding pass on their next launch.
+     *
+     * Derived from `sha256("<path>|<size>|<mtime>|<modelId>|<FORMAT_VERSION>")`, first 8 bytes, hex.
+     * If this fails after a deliberate [EmbeddingCache.FORMAT_VERSION] bump, recompute and update it;
+     * if it fails for any other reason, the change is a cache-invalidating bug.
+     */
+    @Test fun `cache file path is stable`() {
+        val (cache, dir) = tempCache(modelId = "model-a")
+        cache.put(photo("test", sizeBytes = 1000, mtime = 1000), PhotoFeatures(floatArrayOf(1f), 1f))
+
+        val stored = Files.walk(dir).filter { Files.isRegularFile(it) }.toList()
+        assertEquals(1, stored.size, "expected exactly one stored entry")
+        // "/photos/test.jpg|1000|1000|model-a|3"
+        assertEquals("embeddings/df/df2352c29931c4df.emb", dir.relativize(stored.single()).toString())
+    }
+
     @Test fun `a corrupted entry returns null and is purged`() {
         val (cache, dir) = tempCache()
         val p = photo("test")

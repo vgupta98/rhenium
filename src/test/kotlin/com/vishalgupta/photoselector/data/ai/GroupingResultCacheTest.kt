@@ -79,6 +79,26 @@ class GroupingResultCacheTest {
         assertNull(cache.get(cache.keyFor("model-a", photos.dropLast(1)), photos.dropLast(1)))
     }
 
+    /**
+     * GOLDEN KEY - pinned deliberately, twin of `EmbeddingCacheTest`'s. Note the key *composition*
+     * here differs from the embedding cache's (newline-joined fingerprint, model id first); both
+     * shapes must stay byte-identical or every user re-pays the cold Similarity pass.
+     *
+     * Derived from `sha256("<modelId>\n<FORMAT_VERSION>" + "\n<path>|<size>|<mtime>" * n)`, first 8
+     * bytes, hex. A deliberate [GroupingResultCache.FORMAT_VERSION] bump means recomputing this;
+     * any other cause of failure is a cache-invalidating bug.
+     */
+    @Test fun `cache file path is stable`() {
+        val (cache, dir) = tempCache()
+        val (photos, groups) = photosAndGroups()
+        cache.put(cache.keyFor("model-a", photos.take(3)), groups.take(1))
+
+        val stored = Files.walk(dir).filter { Files.isRegularFile(it) }.toList()
+        assertEquals(1, stored.size, "expected exactly one stored entry")
+        // "model-a\n5\n/photos/a.jpg|1000|1000\n/photos/b.jpg|1000|1000\n/photos/c.jpg|1000|1000"
+        assertEquals("groupings/b3/b38e6f12a67bf29a.grp", dir.relativize(stored.single()).toString())
+    }
+
     @Test fun `a corrupt entry is a clean miss`() {
         val (cache, dir) = tempCache()
         val (photos, groups) = photosAndGroups()
