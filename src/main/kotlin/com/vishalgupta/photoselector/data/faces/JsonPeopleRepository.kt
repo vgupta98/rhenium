@@ -35,8 +35,14 @@ import java.nio.file.Files
  * version — leaves the root **unbound**, so no write can clobber it. That is deliberately the same
  * refuse-to-write posture `JsonCategoriesRepository` takes, and for the same reason: the file holds
  * the one thing a rescan cannot regenerate (the names), so an unreadable one is to be preserved for
- * salvage, not overwritten. In-memory state still updates, so the session keeps working; only the
- * write is withheld, and the next call re-reads and recovers.
+ * salvage, not overwritten.
+ *
+ * The root then stays unbound until the file becomes readable, and **mutations do not take effect**:
+ * every entry point re-binds first, which re-clears the in-memory set, so a rename or delete finds
+ * nothing to act on and a [replaceAll] is discarded by the next read. People are surfaced as empty
+ * throughout — and [photosOf] answers "can't resolve", which is what stops a person category pruning
+ * the user's pins and excludes against a membership this repository could not compute. Nothing here
+ * reports *why* the set is empty; PR-1b adds that signal alongside whatever renders it.
  *
  * PII: never log a person's name.
  */
