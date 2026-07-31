@@ -45,13 +45,17 @@ data class StoredPerson(val dto: PersonDto, val raw: JsonObject? = null)
 object PeopleFile {
     const val VERSION = 1
 
+    /**
+     * Decodes a v1 people document, **throwing** on anything else — a malformed file or a version
+     * this build doesn't know. Both are "I cannot read this", and the repository turns that into a
+     * refusal to bind (and therefore a refusal to write), rather than into "no people yet": reading a
+     * future v2 as empty and then rewriting it as v1 would destroy the whole newer file, which is
+     * exactly what the unknown-field carry-through exists to prevent.
+     */
     fun decode(json: Json, text: String): List<StoredPerson> {
         val root = json.parseToJsonElement(text).jsonObject
-        // v1 is the only shape today, and a future v2 must NOT be read as one: people are derived
-        // data, so degrading to "none yet" costs at most a rescan, whereas mis-decoding a newer file
-        // and rewriting it as v1 would destroy whatever that version added.
         val version = root["version"]?.jsonPrimitive?.intOrNull ?: VERSION
-        if (version != VERSION) return emptyList()
+        require(version == VERSION) { "unsupported people file version $version (this build reads v$VERSION)" }
         return (root["people"] as? JsonArray).orEmpty().map { element ->
             val obj = element.jsonObject
             StoredPerson(json.decodeFromJsonElement(PersonDto.serializer(), obj), obj)

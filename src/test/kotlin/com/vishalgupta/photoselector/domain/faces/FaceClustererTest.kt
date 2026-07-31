@@ -4,6 +4,7 @@ import com.vishalgupta.photoselector.domain.model.PhotoId
 import kotlin.math.sqrt
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -156,6 +157,18 @@ class FaceClustererTest {
         )
 
         assertEquals(0, produced, "fixed() must not touch the pairwise distances")
+    }
+
+    @Test
+    fun packedDistancesRefusesAFaceWithNoEmbedding() {
+        // The triangle is indexed positionally, so silently dropping a gap would hand the caller a
+        // shorter array in a different ordering - out-of-bounds at best, wrong clusters at worst.
+        val a = face("a")
+        val missing = face("missing")
+
+        assertFailsWith<IllegalArgumentException> {
+            FaceClusterer.packedDistances(listOf(a, missing), mapOf(a to vec(0.0)))
+        }
     }
 
     @Test

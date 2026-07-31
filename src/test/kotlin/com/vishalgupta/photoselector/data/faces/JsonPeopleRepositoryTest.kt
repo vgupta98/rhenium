@@ -159,16 +159,47 @@ class JsonPeopleRepositoryTest {
     }
 
     @Test
-    fun aCorruptFileDegradesToNoPeople() = runTest {
+    fun aCorruptFileIsSurfacedAsEmptyAndNeverClobbered() = runTest {
+        // The file holds the one thing a rescan cannot regenerate - the names - so an unreadable one
+        // is preserved for salvage, not overwritten. Same posture as JsonCategoriesRepository.
         val (_, root) = repo()
-        writePeopleFile(root, "{ this is not json")
+        val corrupt = "{ this is not json"
+        writePeopleFile(root, corrupt)
 
         val (repo, _) = repo()
         assertEquals(emptyList(), repo.observePeople(root).value)
 
-        // And the repository still works from there - a new scan simply overwrites the bad file.
         repo.replaceAll(root, listOf(person("p1", name = "Alice")))
-        assertEquals("Alice", assertNotNull(repo.observePeople(root).value.singleOrNull()).name)
+        repo.rename(root, PersonId("p1"), "Bob")
+        repo.delete(root, PersonId("p1"))
+
+        assertEquals(corrupt, readPeopleFile(root), "unreadable file must be left untouched")
+    }
+
+    @Test
+    fun aFileFromANewerVersionSurvivesAScanRenameAndDeleteByteIntact() = runTest {
+        // Reading a future v2 as "no people yet" and then rewriting it as v1 would destroy the whole
+        // newer file - strictly worse than not understanding it. So a version we don't know leaves
+        // the root unbound, exactly like a corrupt one.
+        val (_, root) = repo()
+        val v2 = """
+            {
+              "version": 2,
+              "people": [ { "id": "p1", "displayName": "Alice", "clusters": [ 1, 2, 3 ] } ]
+            }
+        """.trimIndent()
+        writePeopleFile(root, v2)
+
+        val (repo, _) = repo()
+        assertEquals(emptyList(), repo.observePeople(root).value)
+        // "Can't answer" - so a person category won't prune the user's overrides against it either.
+        assertEquals(null, repo.photosOf(root, PersonId("p1")))
+
+        repo.replaceAll(root, listOf(person("p9", name = "Someone")))
+        repo.rename(root, PersonId("p9"), "Else")
+        repo.delete(root, PersonId("p9"))
+
+        assertEquals(v2, readPeopleFile(root), "a newer-version file must survive byte-intact")
     }
 
     @Test

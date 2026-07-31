@@ -31,9 +31,12 @@ import java.nio.file.Files
  * folder move through the stored centroid re-match, not through its face list. Keeping the shape
  * minimal is the point — the file is rewritten wholesale on every scan.
  *
- * A file that fails to decode is treated as "no people yet" rather than a hard failure: the worst
- * case is one lost set of names, and refusing to bind would leave face scanning permanently broken
- * with no way back.
+ * A file that exists but cannot be decoded — corrupt, or written by a build that knows a later
+ * version — leaves the root **unbound**, so no write can clobber it. That is deliberately the same
+ * refuse-to-write posture `JsonCategoriesRepository` takes, and for the same reason: the file holds
+ * the one thing a rescan cannot regenerate (the names), so an unreadable one is to be preserved for
+ * salvage, not overwritten. In-memory state still updates, so the session keeps working; only the
+ * write is withheld, and the next call re-reads and recovers.
  *
  * PII: never log a person's name.
  */
@@ -104,17 +107,31 @@ class JsonPeopleRepository(
 
     private fun bind(root: RootFolder) {
         val stored = loadFromDisk(root)
+        if (stored == null) {
+            // An existing file we cannot read (corrupt, or a version from a newer build). Leave the
+            // root UNBOUND: writeToDisk early-returns while boundRoot is null, so the next scan or
+            // rename cannot overwrite - and thereby destroy - a file that may still hold the user's
+            // names. The next call re-reads and recovers once the file is readable again. Same
+            // posture, and the same reasoning, as JsonCategoriesRepository.bind.
+            rawById = emptyMap()
+            peopleFlow.value = emptyList()
+            boundRoot = null
+            return
+        }
         rawById = stored.associateBy { it.dto.id }
         peopleFlow.value = stored.map { it.dto.toDomain() }
         boundRoot = root
     }
 
-    private fun loadFromDisk(root: RootFolder): List<StoredPerson> {
+    /**
+     * The stored people, or **null** when a file exists but could not be decoded — so [bind] can
+     * refuse to bind rather than expose an empty model that a later write would persist over it.
+     * A root with no file at all is simply empty, and binds normally.
+     */
+    private fun loadFromDisk(root: RootFolder): List<StoredPerson>? {
         val file = root.peopleFile
         if (!Files.exists(file)) return emptyList()
-        // A corrupt file degrades to "no people": the names are recoverable by renaming again, and
-        // refusing to bind would wedge face scanning with no user-visible way out.
-        return runCatching { PeopleFile.decode(json, Files.readString(file)) }.getOrDefault(emptyList())
+        return runCatching { PeopleFile.decode(json, Files.readString(file)) }.getOrNull()
     }
 
     private suspend fun writeToDisk(root: RootFolder) {

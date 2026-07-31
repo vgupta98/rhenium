@@ -134,9 +134,16 @@ object FaceClusterer {
      * for `i > j` at `i*(i-1)/2 + j`. The shape [agglomerate] works over and the shape a
      * [ThresholdRule] is handed. Unboxed and allocated once: `n(n-1)/2` floats, so 12,000 faces is
      * ~288 MB. Only build it when something actually needs it.
+     *
+     * **Every face must have an embedding.** The triangle is indexed positionally against [faces],
+     * so quietly skipping a gap would return a shorter array in a different ordering — an
+     * out-of-bounds read at best, silently wrong clusters at worst. Callers filter first
+     * ([cluster] does); this fails loudly rather than letting a future one not.
      */
     fun packedDistances(faces: List<FaceId>, embeddings: Map<FaceId, FaceEmbedding>): FloatArray {
-        val vectors = faces.mapNotNull { embeddings[it] }
+        val vectors = faces.map {
+            requireNotNull(embeddings[it]) { "packedDistances needs an embedding for every face; $it has none" }
+        }
         val n = vectors.size
         if (n < 2) return FloatArray(0)
         val out = FloatArray(n * (n - 1) / 2)
