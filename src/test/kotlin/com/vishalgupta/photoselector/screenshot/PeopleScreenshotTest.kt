@@ -34,8 +34,10 @@ import kotlin.test.assertTrue
  * The People screen in every branch it has. Eyeball the PNGs under `build/screenshots/`:
  *  - `people-unnamed`: a "TO NAME" section of cluster cards — a face crop, a photo count, an inline
  *    name field, and the single "Skip" verdict. The top bar shows the naming backlog.
- *  - `people-mixed`: TO NAME above NAMED (the field pre-filled, its commit riding the field's
- *    check), sharing one grid so the cards line up across the section break.
+ *  - `people-mixed`: TO NAME above NAMED, sharing one grid so the cards line up across the section
+ *    break — which is the whole subject of this frame. Two card rows plus the top bar exceed the
+ *    window, so the NAMED row's name fields continue below the fold; a NAMED card is shown complete
+ *    in `people-unavailable-with-people`.
  *  - `people-skipped`: the third section, "SKIPPED / NOT PEOPLE", with its "Bring back" action. It
  *    gets its own frame because the headless capture window is a fixed 1024x768 and all three
  *    sections do not fit at once.
@@ -115,12 +117,9 @@ class PeopleScreenshotTest {
         // all three sections never fit at once. Eyeball build/screenshots/people-skipped.png - the
         // label reads "SKIPPED / NOT PEOPLE" (naming both readings of the one stored verdict) and
         // the card's only action is "Bring back".
-        render(
-            PeopleUiState(
-                named = listOf(card("p2", "Alice", 88, "b")),
-                skipped = listOf(card("p4", null, 5, "d")),
-            ),
-        )
+        // Skipped only: a card above it would push "Bring back" past the window's bottom edge, and a
+        // frame that silently loses its own subject is the trap this split exists to avoid.
+        render(PeopleUiState(skipped = listOf(card("p4", null, 5, "d"))))
         rule.dumpScreenshot("people-skipped")
     }
 
@@ -180,7 +179,9 @@ class PeopleScreenshotTest {
     private fun render(state: PeopleUiState, personCategoryCount: Int = 1) {
         rule.setContent {
             AppTheme {
-                Surface(Modifier.size(900.dp, 780.dp)) {
+                // Inside the harness's fixed 1024x768 capture window (see testing.md): a taller
+                // Surface doesn't grow the frame, it just loses the overflow off the bottom edge.
+                Surface(Modifier.size(900.dp, 760.dp)) {
                     PeopleScreen(
                         state = state,
                         rootName = "Iceland 2026",
