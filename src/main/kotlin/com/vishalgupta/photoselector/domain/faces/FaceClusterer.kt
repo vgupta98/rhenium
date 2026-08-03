@@ -18,13 +18,13 @@ package com.vishalgupta.photoselector.domain.faces
  * the matrix is maintained rather than recomputed, and nothing else materialises a second copy (see
  * [ThresholdRule], whose distances are lazily produced precisely so the shipped rule allocates none).
  *
- * ## Rescan preserves named people
- * A scan is a *full* recluster, but a name is the one thing the user authored, so it must survive.
- * [cluster] therefore runs in two phases: every face is first offered to the nearest **named**
- * person's centroid and joins it if within the cut; only the residue is clustered from scratch. A
- * named person with no surviving faces keeps its stored centroid so it can still re-match later.
- * Unnamed cluster identity and ordering are explicitly *not* stable across scans — nothing
- * user-visible hangs off them.
+ * ## Rescan preserves the user's decisions
+ * A scan is a *full* recluster, but a name — or an explicit "not a person" dismissal — is something
+ * the user authored, so it must survive. [cluster] therefore runs in two phases: every face is first
+ * offered to the nearest **anchor** person's centroid ([Person.isAnchor]: named *or* dismissed) and
+ * joins it if within the cut; only the residue is clustered from scratch. An anchor with no surviving
+ * faces keeps its stored centroid so it can still re-match later. Anonymous cluster identity and
+ * ordering are explicitly *not* stable across scans — nothing user-visible hangs off them.
  */
 object FaceClusterer {
 
@@ -65,11 +65,15 @@ object FaceClusterer {
      *
      * @param faces the face ids to cluster, in a deterministic order (the scan's photo order).
      * @param embeddings each face's embedding; a face with no embedding is skipped entirely.
-     * @param known the previous scan's people. Only the **named** ones influence the result — they
-     *   keep their id and name and absorb any face within the cut of their centroid.
+     * @param known the previous scan's people. Only the **anchors** influence the result — a named or
+     *   dismissed person keeps their id, name and dismissal and absorbs any face within the cut of
+     *   their centroid.
      * @param rule the merge cut (see [ThresholdRule]).
      * @param newPersonId generates ids for freshly discovered (unnamed) people. Injected so the
      *   function stays pure and tests are deterministic.
+     *
+     * The returned people carry bare [FaceRef]s (identity only): where a face sits on its photo is
+     * detection output the caller already holds, so the pure clusterer never sees a box.
      */
     fun cluster(
         faces: List<FaceId>,
@@ -79,14 +83,14 @@ object FaceClusterer {
         newPersonId: () -> PersonId,
     ): List<Person> {
         val embedded = faces.filter { embeddings[it] != null }
-        val named = known.filter { it.isNamed }
-        if (embedded.isEmpty()) return named.map { it.copy(faces = emptyList()) }
+        val anchors = known.filter { it.isAnchor }
+        if (embedded.isEmpty()) return anchors.map { it.copy(faces = emptyList()) }
 
         // Lazily produced: [fixed] never asks, so nothing O(n^2) is allocated on the shipped path.
         val cut = rule.cut { packedDistances(embedded, embeddings) }
 
-        // Phase 1 - re-match onto named centroids, so a rename survives a rescan.
-        val namedCentroids = named.map { it to it.centroidEmbedding() }
+        // Phase 1 - re-match onto anchor centroids, so a name or a dismissal survives a rescan.
+        val namedCentroids = anchors.map { it to it.centroidEmbedding() }
         val claimed = LinkedHashMap<PersonId, MutableList<FaceId>>()
         val residue = ArrayList<FaceId>(embedded.size)
         for (face in embedded) {
@@ -108,10 +112,10 @@ object FaceClusterer {
             }
         }
 
-        val preserved = named.map { person ->
+        val preserved = anchors.map { person ->
             val members = claimed[person.id].orEmpty()
             person.copy(
-                faces = members,
+                faces = members.map(::FaceRef),
                 // A person that kept no faces keeps its stored centroid, so it can re-match a later scan.
                 centroid = if (members.isEmpty()) person.centroid else centroidOf(members, embeddings),
             )
@@ -122,7 +126,7 @@ object FaceClusterer {
             Person(
                 id = newPersonId(),
                 name = null,
-                faces = members,
+                faces = members.map(::FaceRef),
                 centroid = centroidOf(members, embeddings),
             )
         }

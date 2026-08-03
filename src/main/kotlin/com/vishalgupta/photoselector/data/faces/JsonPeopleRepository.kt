@@ -1,12 +1,15 @@
 package com.vishalgupta.photoselector.data.faces
 
 import com.vishalgupta.photoselector.data.io.AtomicJsonWriter
+import com.vishalgupta.photoselector.domain.faces.FaceBox
 import com.vishalgupta.photoselector.domain.faces.FaceId
+import com.vishalgupta.photoselector.domain.faces.FaceRef
 import com.vishalgupta.photoselector.domain.faces.Person
 import com.vishalgupta.photoselector.domain.faces.PersonId
 import com.vishalgupta.photoselector.domain.model.PhotoId
 import com.vishalgupta.photoselector.domain.model.RootFolder
 import com.vishalgupta.photoselector.domain.repository.PeopleRepository
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -41,17 +44,24 @@ import java.nio.file.Files
  * every entry point re-binds first, which re-clears the in-memory set, so a rename or delete finds
  * nothing to act on and a [replaceAll] is discarded by the next read. People are surfaced as empty
  * throughout — and [photosOf] answers "can't resolve", which is what stops a person category pruning
- * the user's pins and excludes against a membership this repository could not compute. Nothing here
- * reports *why* the set is empty; PR-1b adds that signal alongside whatever renders it.
+ * the user's pins and excludes against a membership this repository could not compute. [isUnreadable]
+ * is how that state reaches the UI, so a scan can never report "found 12 people" over a write this
+ * repository silently discarded; [deleteAll] is the one mutation that deliberately overrides the
+ * refusal, because a purge *is* the statement that nothing here is worth salvaging.
  *
  * PII: never log a person's name.
  */
 class JsonPeopleRepository(
     private val json: Json,
+    // The disk-write dispatcher. Injected only so a test whose writes happen inside a *launched*
+    // coroutine can drive them on its own scheduler: awaiting real IO from the test scheduler is a
+    // race, and the alternative (sleeping) is a flake waiting to happen.
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) : PeopleRepository {
 
     private val mutex = Mutex()
     private val peopleFlow = MutableStateFlow<List<Person>>(emptyList())
+    private val unreadable = MutableStateFlow(false)
 
     private var boundRoot: RootFolder? = null
 
@@ -73,6 +83,11 @@ class JsonPeopleRepository(
         }
     }
 
+    override fun isUnreadable(root: RootFolder): StateFlow<Boolean> {
+        if (boundRoot?.path != root.path) bind(root)
+        return unreadable.asStateFlow()
+    }
+
     override suspend fun rename(root: RootFolder, id: PersonId, name: String?) {
         if (boundRoot?.path != root.path) bind(root)
         val trimmed = name?.trim()?.takeIf { it.isNotEmpty() }
@@ -81,6 +96,33 @@ class JsonPeopleRepository(
             if (current.none { it.id == id }) return@withLock
             peopleFlow.value = current.map { if (it.id == id) it.copy(name = trimmed) else it }
             writeToDisk(root)
+        }
+    }
+
+    override suspend fun setDismissed(root: RootFolder, id: PersonId, dismissed: Boolean) {
+        if (boundRoot?.path != root.path) bind(root)
+        mutex.withLock {
+            val current = peopleFlow.value
+            if (current.none { it.id == id }) return@withLock
+            peopleFlow.value = current.map { if (it.id == id) it.copy(dismissed = dismissed) else it }
+            writeToDisk(root)
+        }
+    }
+
+    override suspend fun deleteAll(root: RootFolder) {
+        mutex.withLock {
+            peopleFlow.value = emptyList()
+            rawById = emptyMap()
+            // Delete rather than write an empty document, and do it whether or not the root ever bound:
+            // an unreadable sidecar is exactly what a purge is meant to get rid of. Binding afterwards
+            // leaves the root readable again (a missing file is simply "no people").
+            try {
+                withContext(ioDispatcher) { Files.deleteIfExists(root.peopleFile) }
+            } catch (_: Throwable) {
+                // Read-only volume or a locked file: the set is still empty in memory for this session.
+            }
+            boundRoot = root
+            unreadable.value = false
         }
     }
 
@@ -108,6 +150,7 @@ class JsonPeopleRepository(
             boundRoot = null
             rawById = emptyMap()
             peopleFlow.value = emptyList()
+            unreadable.value = false
         }
     }
 
@@ -122,11 +165,13 @@ class JsonPeopleRepository(
             rawById = emptyMap()
             peopleFlow.value = emptyList()
             boundRoot = null
+            unreadable.value = true
             return
         }
         rawById = stored.associateBy { it.dto.id }
         peopleFlow.value = stored.map { it.dto.toDomain() }
         boundRoot = root
+        unreadable.value = false
     }
 
     /**
@@ -149,7 +194,7 @@ class JsonPeopleRepository(
             },
         )
         try {
-            withContext(Dispatchers.IO) { AtomicJsonWriter.write(root.peopleFile, bytes) }
+            withContext(ioDispatcher) { AtomicJsonWriter.write(root.peopleFile, bytes) }
         } catch (_: Throwable) {
             // Read-only volume or a locked file: the set is still correct in memory for this session.
         }
@@ -158,14 +203,36 @@ class JsonPeopleRepository(
     private fun PersonDto.toDomain(): Person = Person(
         id = PersonId(id),
         name = name?.takeIf { it.isNotBlank() },
-        faces = faces.map { FaceId(PhotoId(it.photo), it.index) },
+        faces = faces.map {
+            FaceRef(
+                id = FaceId(PhotoId(it.photo), it.index),
+                // A box is four normalised floats; anything else (a hand-edited file, a shape a newer
+                // build writes) is simply "no drawable box" rather than a decode failure.
+                box = it.box?.takeIf { b -> b.size == BOX_COMPONENTS }
+                    ?.let { b -> FaceBox(b[0], b[1], b[2], b[3]) },
+                score = it.score,
+            )
+        },
         centroid = centroid,
+        dismissed = dismissed,
     )
 
     private fun Person.toDto(): PersonDto = PersonDto(
         id = id.value,
         name = name,
-        faces = faces.map { FaceRefDto(photo = it.photo.value, index = it.index) },
+        faces = faces.map { ref ->
+            FaceRefDto(
+                photo = ref.id.photo.value,
+                index = ref.id.index,
+                box = ref.box?.let { listOf(it.x, it.y, it.width, it.height) },
+                score = ref.score,
+            )
+        },
         centroid = centroid,
+        dismissed = dismissed,
     )
+
+    private companion object {
+        const val BOX_COMPONENTS = 4
+    }
 }

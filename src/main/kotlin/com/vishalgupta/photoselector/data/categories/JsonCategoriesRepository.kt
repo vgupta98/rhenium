@@ -59,6 +59,10 @@ class JsonCategoriesRepository(
     // same operation (deleting a person category forgets the person, or people leak). Injected rather
     // than reached for, keeping this repository blind to the faces feature.
     private val onCategoryDeleted: suspend (RootFolder, Category) -> Unit = { _, _ -> },
+    // The rename counterpart of [onCategoryDeleted]: fired after a category is renamed, carrying the
+    // category as it now reads, so whatever its rule points at can follow the name (renaming a person
+    // category renames the person). Same injected, feature-blind shape.
+    private val onCategoryRenamed: suspend (RootFolder, Category) -> Unit = { _, _ -> },
 ) : CategoriesRepository {
 
     private val mutex = Mutex()
@@ -132,12 +136,16 @@ class JsonCategoriesRepository(
         // user-created smart category — a person — is renamable like any other bucket.
         require(id !in Category.SMART_SEED_IDS) { "A seeded smart category cannot be renamed." }
         if (boundRoot?.path != root.path) bind(root)
-        mutex.withLock {
+        val renamed = mutex.withLock {
             categoriesFlow.value = categoriesFlow.value.map {
                 if (it.id == id) it.copy(name = newName.trim()) else it
             }
             writeToDisk(root)
+            categoriesFlow.value.firstOrNull { it.id == id }
         }
+        // Outside the lock, exactly like [onCategoryDeleted]: the hook may touch another repository,
+        // and holding this one's mutex across a foreign suspend call is how deadlocks get written.
+        renamed?.let { onCategoryRenamed(root, it) }
     }
 
     override suspend fun delete(root: RootFolder, id: CategoryId) {

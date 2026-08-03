@@ -82,7 +82,7 @@ class GroupingCoordinatorTest {
 
         coordinator.groupingFor(a)
         advanceUntilIdle() // run past the grace window so the armed bar shows a's count
-        assertEquals(GroupingCoordinator.Progress(2, a.size), coordinator.progress.value)
+        assertEquals(BackgroundPassCoordinator.Progress(2, a.size), coordinator.progress.value)
 
         coordinator.groupingFor(b)
         assertNull("superseding a different slice clears the stale progress immediately", coordinator.progress.value)
@@ -101,7 +101,7 @@ class GroupingCoordinatorTest {
         )
         coordinator.groupingFor(photos)
         advanceUntilIdle()
-        assertEquals(GroupingCoordinator.Progress(1, photos.size), coordinator.progress.value)
+        assertEquals(BackgroundPassCoordinator.Progress(1, photos.size), coordinator.progress.value)
 
         coordinator.reset()
         assertNull("reset clears progress", coordinator.progress.value)

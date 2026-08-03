@@ -72,6 +72,8 @@ import com.vishalgupta.photoselector.domain.usecase.ExportPhotosXmpUseCase
 import com.vishalgupta.photoselector.domain.usecase.MovePhotosToTrashUseCase
 import com.vishalgupta.photoselector.domain.usecase.ScanRootFolderUseCase
 import com.vishalgupta.photoselector.presentation.browser.BrowserViewModel
+import com.vishalgupta.photoselector.presentation.common.BackgroundPassCoordinator
+import com.vishalgupta.photoselector.presentation.common.FaceScanCoordinator
 import com.vishalgupta.photoselector.presentation.common.GroupingCoordinator
 import com.vishalgupta.photoselector.presentation.common.GroupingMode
 import com.vishalgupta.photoselector.presentation.common.XmpSyncCoordinator
@@ -81,6 +83,7 @@ import com.vishalgupta.photoselector.presentation.grid.GridViewModel
 import com.vishalgupta.photoselector.presentation.grid.LibraryRailViewModel
 import com.vishalgupta.photoselector.presentation.inspect.InspectMode
 import com.vishalgupta.photoselector.presentation.inspect.InspectViewModel
+import com.vishalgupta.photoselector.presentation.people.PeopleViewModel
 import com.vishalgupta.photoselector.presentation.navigation.CategoryScope
 import com.vishalgupta.photoselector.presentation.navigation.GridRetentionKey
 import com.vishalgupta.photoselector.presentation.navigation.MAX_INSPECT_GRID_PHOTOS
@@ -205,7 +208,7 @@ class AppContainer {
     )
 
     /** Progress of the background Similarity pass (null when idle), for the navigation host's hint. */
-    val groupingActivity: StateFlow<GroupingCoordinator.Progress?> get() = groupingCoordinator.progress
+    val groupingActivity: StateFlow<BackgroundPassCoordinator.Progress?> get() = groupingCoordinator.progress
 
     private fun loadEmbeddingModel(): EmbeddingModel = try {
         OnnxEmbeddingModel.Loader.fromResource()
@@ -279,6 +282,36 @@ class AppContainer {
 
     private val peopleRepository: PeopleRepository = JsonPeopleRepository(json)
 
+    // The one background face scan, sharing GroupingCoordinator's lifetime shape: a single instance
+    // parented to appScope (not retained per root) so the navigation host collects ONE stable progress
+    // flow for the off-screen chip, with reset() on a root change. Reads the scanned root at pass
+    // start rather than being rebuilt per root. The scanner arrives as a *provider*, resolved inside
+    // the pass, so constructing this doesn't open the ONNX sessions the `by lazy` above defers.
+    private val faceScanCoordinator = FaceScanCoordinator(
+        scanner = { faceScanner },
+        people = peopleRepository,
+        currentRoot = { scannedRoot },
+        parentJob = appScope.coroutineContext[Job],
+        dispatcher = Dispatchers.IO,
+    )
+
+    /** Progress of the background face scan (null when idle), for the navigation host's chip. */
+    val faceScanActivity: StateFlow<BackgroundPassCoordinator.Progress?> get() = faceScanCoordinator.progress
+
+    /** Stops a running face scan — the chip's (and the People banner's) Stop action. */
+    fun stopFaceScan() {
+        faceScanCoordinator.cancel()
+    }
+
+    /**
+     * Forgets every cached detection and embedding, for every root — the cache half of the People
+     * screen's "delete all face data" purge. Goes through the cache's companion, which needs only the
+     * directory, so a purge never opens the ONNX sessions just to delete files.
+     */
+    fun clearFaceCache() {
+        FaceCache.clear(cacheDir)
+    }
+
     private val photoRepository: PhotoRepository = FileSystemPhotoRepository(formatRegistry)
     private val categoriesRepository: CategoriesRepository =
         JsonCategoriesRepository(
@@ -306,6 +339,13 @@ class AppContainer {
             onCategoryDeleted = { root, category ->
                 (category.rule as? CategoryRule.Person)?.let {
                     peopleRepository.delete(root, PersonId(it.personId))
+                }
+            },
+            // ...and the symmetric half: renaming a person's category from the rail renames the
+            // person, so the People screen and the rail can never disagree about who someone is.
+            onCategoryRenamed = { root, category ->
+                (category.rule as? CategoryRule.Person)?.let {
+                    peopleRepository.rename(root, PersonId(it.personId), category.name)
                 }
             },
         )
@@ -577,10 +617,26 @@ class AppContainer {
                 moveToTrash = movePhotosToTrashUseCase,
                 photosForRoot = { photosFor(root) },
                 xmpSync = xmpSyncCoordinator(root),
+                people = peopleRepository,
+                faceScan = faceScanCoordinator,
                 onPhotosDeleted = { ids -> removeScannedPhotos(ids) },
                 parentJob = folderJob,
             )
         }
+
+    /**
+     * The People screen for [root]. Built per visit (unlike the rail): it holds no scroll or focus
+     * state worth retaining, and the expensive thing — the scan — lives in the container-level
+     * [faceScanCoordinator], so leaving and returning re-attaches to the same pass.
+     */
+    fun peopleViewModel(root: RootFolder): PeopleViewModel = PeopleViewModel(
+        root = root,
+        people = peopleRepository,
+        categories = categoriesRepository,
+        scanCoordinator = faceScanCoordinator,
+        photosForRoot = { photosFor(root) },
+        parentJob = folderJob,
+    )
 
     /**
      * The live XMP-sidecar sync coordinator for [root], reused for the session. Owns the enable
@@ -613,8 +669,10 @@ class AppContainer {
         retainedXmpSync.values.forEach { it.reset() }
         retainedXmpSync.clear()
         // Drop any in-flight background Similarity pass and clear its progress; the coordinator object
-        // itself stays (the host collects its flow), only the per-root work is reset.
+        // itself stays (the host collects its flow), only the per-root work is reset. Same for the
+        // face scan, which is container-level for exactly the same reason.
         groupingCoordinator.reset()
+        faceScanCoordinator.reset()
         _folderJob.cancel()
         _folderJob = SupervisorJob(appScope.coroutineContext[Job])
         categoriesRepository.clearContext()

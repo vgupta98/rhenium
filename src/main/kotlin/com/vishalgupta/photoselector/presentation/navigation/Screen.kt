@@ -58,6 +58,23 @@ sealed interface Screen {
         val returnScrollIndex: Int? = null,
         val origin: InspectOrigin = InspectOrigin.Grid,
     ) : Screen
+
+    /**
+     * People: name the clusters the face scan found, so each named person becomes a smart category.
+     *
+     * A sibling of [Grid], **not** a [CategoryScope] — a scope stays closed and predicate-blind (a
+     * person's *photos* ride `CategoryScope.Category`, like any other bucket; this screen is the
+     * naming surface, which is a different job). It renders full-screen with its own top bar, so the
+     * library rail (mounted only inside the Grid branch) leaves composition while it is up.
+     *
+     * [returnScope] is the grid scope to land back on. No scroll index travels either way: the grid's
+     * view model and scroll state are both retained across this round trip, so returning without one
+     * is a *warm* return — the same rule the rail's own navigation follows.
+     */
+    data class People(
+        val root: RootFolder,
+        val returnScope: CategoryScope = CategoryScope.AllPhotos,
+    ) : Screen
 }
 
 /** Where an [Screen.Inspect] was opened from, so it can return there on exit. */

@@ -14,6 +14,18 @@ import com.vishalgupta.photoselector.domain.model.PhotoId
  */
 data class FaceId(val photo: PhotoId, val index: Int)
 
+/**
+ * A face as a [Person] carries it: its [id] plus enough of the detection to *draw* it — the
+ * normalised [box] and the detector's [score].
+ *
+ * The box rides here (and into the people sidecar) rather than being looked up in the face cache on
+ * demand, because composing that cache's key needs both model ids, which would force the ONNX
+ * sessions open just to render a crop — and the cache is size-capped, so an old entry may simply be
+ * gone. Both are null/zero for a face read from a sidecar written before boxes were stored; a UI
+ * showing crops filters on [box] rather than assuming one.
+ */
+data class FaceRef(val id: FaceId, val box: FaceBox? = null, val score: Float = 0f)
+
 /** A point in an image, normalised to `0..1` of the image's width/height. */
 data class FacePoint(val x: Float, val y: Float)
 

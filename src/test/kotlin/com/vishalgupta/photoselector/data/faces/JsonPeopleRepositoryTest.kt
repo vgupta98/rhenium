@@ -1,6 +1,8 @@
 package com.vishalgupta.photoselector.data.faces
 
+import com.vishalgupta.photoselector.domain.faces.FaceBox
 import com.vishalgupta.photoselector.domain.faces.FaceId
+import com.vishalgupta.photoselector.domain.faces.FaceRef
 import com.vishalgupta.photoselector.domain.faces.Person
 import com.vishalgupta.photoselector.domain.faces.PersonId
 import com.vishalgupta.photoselector.domain.model.PhotoId
@@ -31,7 +33,7 @@ class JsonPeopleRepositoryTest {
     private fun person(id: String, name: String? = null, photos: List<String> = listOf("a")) = Person(
         id = PersonId(id),
         name = name,
-        faces = photos.mapIndexed { i, p -> FaceId(PhotoId(p), i) },
+        faces = photos.mapIndexed { i, p -> FaceRef(FaceId(PhotoId(p), i)) },
         centroid = listOf(0.5f, -0.25f),
     )
 
@@ -52,7 +54,7 @@ class JsonPeopleRepositoryTest {
         val alice = people.first { it.id == PersonId("p1") }
         assertEquals("Alice", alice.name)
         assertTrue(alice.isNamed)
-        assertEquals(listOf(FaceId(PhotoId("a"), 0), FaceId(PhotoId("b"), 1)), alice.faces)
+        assertEquals(listOf(FaceId(PhotoId("a"), 0), FaceId(PhotoId("b"), 1)), alice.faceIds)
         assertEquals(listOf(0.5f, -0.25f), alice.centroid)
         assertEquals(null, people.first { it.id == PersonId("p2") }.name)
     }
@@ -200,6 +202,68 @@ class JsonPeopleRepositoryTest {
         repo.delete(root, PersonId("p9"))
 
         assertEquals(v2, readPeopleFile(root), "a newer-version file must survive byte-intact")
+    }
+
+    @Test
+    fun aFaceBoxAndScoreRoundTripSoACropCanBeDrawnWithoutTheModels() = runTest {
+        // The whole point of storing the box: composing a face-cache key needs both ONNX model ids,
+        // so a UI that looked the box up there would open both sessions just to draw a thumbnail.
+        val (repo, root) = repo()
+        val ref = FaceRef(FaceId(PhotoId("a"), 2), box = FaceBox(0.1f, 0.2f, 0.3f, 0.4f), score = 0.94f)
+        repo.replaceAll(root, listOf(Person(PersonId("p1"), name = "Alice", faces = listOf(ref))))
+
+        val (reopened, _) = repo()
+        val restored = reopened.observePeople(root).value.single().faces.single()
+        assertEquals(ref, restored)
+        assertEquals(ref, reopened.observePeople(root).value.single().coverFace)
+    }
+
+    @Test
+    fun aDismissalRoundTripsSoARescanCannotUndoIt() = runTest {
+        val (repo, root) = repo()
+        repo.replaceAll(root, listOf(person("p1")))
+
+        repo.setDismissed(root, PersonId("p1"), dismissed = true)
+
+        val (reopened, _) = repo()
+        val restored = reopened.observePeople(root).value.single()
+        assertTrue(restored.dismissed)
+        assertTrue(restored.isAnchor, "a dismissal must anchor the cluster through the next recluster")
+    }
+
+    @Test
+    fun aBoxWrittenWithTheWrongShapeDegradesToNoCropRatherThanFailingTheDecode() = runTest {
+        val (_, root) = repo()
+        writePeopleFile(
+            root,
+            """
+            { "version": 1, "people": [ { "id": "p1", "faces": [ { "photo": "a", "box": [0.1, 0.2] } ] } ] }
+            """.trimIndent(),
+        )
+
+        val (repo, _) = repo()
+        val face = repo.observePeople(root).value.single().faces.single()
+        assertEquals(null, face.box)
+        assertEquals(FaceId(PhotoId("a"), 0), face.id)
+    }
+
+    @Test
+    fun deleteAllRemovesTheSidecarEvenWhenItCouldNotBeRead() = runTest {
+        // The refuse-to-write posture protects names the user might still want salvaged. A purge is
+        // precisely the statement that they do not, so it is the one mutation that overrides it.
+        val (_, root) = repo()
+        writePeopleFile(root, "{ this is not json")
+
+        val (repo, _) = repo()
+        assertTrue(repo.isUnreadable(root).value, "an undecodable sidecar must be reported, not read as empty")
+
+        repo.deleteAll(root)
+
+        assertTrue(Files.notExists(root.peopleFile))
+        assertTrue(!repo.isUnreadable(root).value, "after the purge the root is readable again")
+        // And it can be written to again, which was the whole problem while it was unreadable.
+        repo.replaceAll(root, listOf(person("p1", name = "Alice")))
+        assertEquals("Alice", repo.observePeople(root).value.single().name)
     }
 
     @Test

@@ -21,7 +21,7 @@ import com.vishalgupta.photoselector.presentation.designsystem.atom.AppOutlinedB
 import com.vishalgupta.photoselector.presentation.designsystem.atom.AppTextButton
 import com.vishalgupta.photoselector.presentation.designsystem.atom.FavouriteStar
 import com.vishalgupta.photoselector.presentation.designsystem.atom.LoadingIndicator
-import com.vishalgupta.photoselector.presentation.designsystem.molecule.BackgroundGroupingChip
+import com.vishalgupta.photoselector.presentation.designsystem.molecule.BackgroundPassChip
 import com.vishalgupta.photoselector.presentation.designsystem.molecule.BusyBar
 import com.vishalgupta.photoselector.presentation.designsystem.molecule.ConflictPolicyButton
 import com.vishalgupta.photoselector.presentation.designsystem.molecule.ErrorPlaceholder
@@ -99,8 +99,16 @@ class DesignSystemGalleryScreenshotTest {
                                 onSelect = {},
                                 similarityProgress = 0.42f,
                             )
-                            BackgroundGroupingChip(processed = 42, total = 100)
+                            BackgroundPassChip(label = "Grouping similar", processed = 42, total = 100)
                         }
+                        // The same chip carrying the face pass's label and its Stop action - one
+                        // component, two labels, rather than a near-twin chip per feature.
+                        BackgroundPassChip(
+                            label = "Finding faces",
+                            processed = 18,
+                            total = 60,
+                            onStop = {},
+                        )
 
                         Text("Busy bar", style = MaterialTheme.typography.titleMedium)
                         BusyBar(label = "Copying… 34 / 120")

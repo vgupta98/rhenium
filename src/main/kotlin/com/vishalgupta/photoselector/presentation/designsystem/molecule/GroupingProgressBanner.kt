@@ -15,18 +15,28 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import com.vishalgupta.photoselector.presentation.designsystem.atom.AppTextButton
 import com.vishalgupta.photoselector.presentation.designsystem.theme.AppTheme
 
 /**
- * The cold-pass banner for the Similarity lens: the on-device-AI grouping pass is a ~minute-long wait
- * over the whole folder, so unlike the bare [BusyBar] used for the instant Time regroup this names
- * what's happening, sets the expectation, and carries the privacy line that makes the on-device story
- * legible — *"Everything stays on your device."* It keeps the determinate fraction the pass already
- * reports. Shown only while [GroupingMode.Similarity] is computing (the caller gates it); the Time
- * lens stays on the plain bar because it finishes inside the progress grace window.
+ * The cold-pass framing banner for a long on-device pass: the Similarity grouping run (and now the
+ * face scan) is a ~minute-long wait over the whole folder, so unlike the bare [BusyBar] used for the
+ * instant Time regroup this names what's happening ([label]), sets the expectation, and carries the
+ * privacy line that makes the on-device story legible — *"Everything stays on your device."* It keeps
+ * the determinate fraction the pass already reports. The caller gates visibility; the Time lens stays
+ * on the plain bar because it finishes inside the progress grace window.
+ *
+ * [onStop] adds a Stop action for a pass the user deliberately started (the face scan). The
+ * Similarity pass omits it — choosing another lens is already the way out of it.
  */
 @Composable
-fun GroupingProgressBanner(processed: Int, total: Int, modifier: Modifier = Modifier) {
+fun GroupingProgressBanner(
+    processed: Int,
+    total: Int,
+    modifier: Modifier = Modifier,
+    label: String = "Finding similar shots",
+    onStop: (() -> Unit)? = null,
+) {
     Column(
         modifier
             .fillMaxWidth()
@@ -44,7 +54,7 @@ fun GroupingProgressBanner(processed: Int, total: Int, modifier: Modifier = Modi
             )
             Column(Modifier.weight(1f)) {
                 Text(
-                    text = "Finding similar shots — analysing $total photos.",
+                    text = "$label — analysing $total photos.",
                     style = MaterialTheme.typography.labelLarge,
                 )
                 Text(
@@ -54,6 +64,7 @@ fun GroupingProgressBanner(processed: Int, total: Int, modifier: Modifier = Modi
                 )
             }
             Text(text = "$processed / $total", style = MaterialTheme.typography.labelMedium)
+            onStop?.let { AppTextButton(text = "Stop", onClick = it) }
         }
         LinearProgressIndicator(
             progress = { if (total <= 0) 0f else (processed.toFloat() / total).coerceIn(0f, 1f) },

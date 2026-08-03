@@ -6,9 +6,12 @@ import com.vishalgupta.photoselector.domain.model.Photo
 import com.vishalgupta.photoselector.domain.model.PhotoId
 import com.vishalgupta.photoselector.domain.model.RootFolder
 import com.vishalgupta.photoselector.domain.repository.CategoriesRepository
+import com.vishalgupta.photoselector.domain.repository.PeopleRepository
 import com.vishalgupta.photoselector.domain.usecase.MovePhotosToTrashUseCase
 import com.vishalgupta.photoselector.presentation.StateHolder
+import com.vishalgupta.photoselector.presentation.common.FaceScanCoordinator
 import com.vishalgupta.photoselector.presentation.common.XmpSyncCoordinator
+import androidx.compose.runtime.Immutable
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -24,6 +27,22 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.swing.Swing
+
+/**
+ * What the rail's People section needs to render, as one stable value.
+ *
+ * [available] false means a scan has run and found the on-device face models unloadable — the section
+ * then renders an explicit "unavailable" row rather than hiding, because a hidden section is
+ * indistinguishable from "this folder has no faces", and that ambiguity is exactly what makes a
+ * packaged-build regression invisible. It defaults to **true** (nothing has gone wrong yet): the
+ * models load lazily on first scan, and probing them just to draw a rail row would undo that.
+ */
+@Immutable
+data class PeopleRailState(
+    val available: Boolean = true,
+    val scanning: Boolean = false,
+    val unnamedCount: Int = 0,
+)
 
 /**
  * Backs the [com.vishalgupta.photoselector.presentation.designsystem.organism.LibraryRail], which
@@ -52,6 +71,10 @@ class LibraryRailViewModel(
     // Live RAW XMP-sidecar sync, owned per root by the container (like the grouping coordinator). The
     // rail footer re-exposes its state + toggle. Defaulted so tests that don't exercise sync omit it.
     private val xmpSync: XmpSyncCoordinator? = null,
+    // The face pipeline's two halves, feeding the rail's People section. Both defaulted: a rail built
+    // without them simply reports face scanning as unavailable, which is the honest answer.
+    private val people: PeopleRepository? = null,
+    private val faceScan: FaceScanCoordinator? = null,
     // Drops the trashed photos from the container's scan snapshot + every retained grid, so screens
     // built or returned to after the sweep are without them. Same hook the per-photo deletes use.
     private val onPhotosDeleted: (Set<PhotoId>) -> Unit = {},
@@ -66,6 +89,38 @@ class LibraryRailViewModel(
     /** Toggles live XMP sidecar sync for this root (footer switch). No-op if sync isn't wired. */
     fun toggleXmpSync() {
         xmpSync?.toggle()
+    }
+
+    /**
+     * The rail's People section state: whether face scanning can run at all, whether a scan is in
+     * flight, and how many clusters are still waiting for a name.
+     *
+     * Lives on this view model rather than a second rail-scoped one — it is already root-scoped and
+     * already the rail's backing model, and the People section is just more rail.
+     */
+    val peopleState: StateFlow<PeopleRailState> =
+        if (people == null || faceScan == null) {
+            MutableStateFlow(PeopleRailState()).asStateFlow()
+        } else {
+            combine(
+                people.observePeople(root),
+                faceScan.progress,
+                faceScan.available,
+            ) { persons, progress, available ->
+                PeopleRailState(
+                    // Null = not probed yet, which is not a reason to show the unavailable row.
+                    available = available != false,
+                    scanning = progress != null,
+                    // A dismissed cluster is a decision already made, and one whose photos have all
+                    // left the root has nothing to name — neither belongs in the "still to do" count.
+                    unnamedCount = persons.count { !it.isNamed && !it.dismissed && it.faces.isNotEmpty() },
+                )
+            }.stateIn(scope, SharingStarted.Eagerly, PeopleRailState())
+        }
+
+    /** Starts (or re-attaches to) the whole-root face scan from the rail. */
+    fun startScan() {
+        faceScan?.scan(photosForRoot())
     }
 
     // One-shot result of a reject sweep, surfaced by [App] as a transient pill.
