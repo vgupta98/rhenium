@@ -27,7 +27,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import com.vishalgupta.photoselector.di.AppContainer
 import com.vishalgupta.photoselector.presentation.browser.BrowserScreen
-import com.vishalgupta.photoselector.presentation.designsystem.molecule.BackgroundGroupingChip
+import com.vishalgupta.photoselector.presentation.designsystem.molecule.BackgroundPassChip
 import com.vishalgupta.photoselector.presentation.designsystem.molecule.PillToast
 import com.vishalgupta.photoselector.presentation.designsystem.molecule.UpdateAvailableBanner
 import com.vishalgupta.photoselector.presentation.designsystem.organism.LibraryRail
@@ -37,6 +37,7 @@ import com.vishalgupta.photoselector.presentation.navigation.CategoryScope
 import com.vishalgupta.photoselector.presentation.navigation.GridRetentionKey
 import com.vishalgupta.photoselector.presentation.navigation.InspectOrigin
 import com.vishalgupta.photoselector.presentation.navigation.Screen
+import com.vishalgupta.photoselector.presentation.people.PeopleScreen
 import com.vishalgupta.photoselector.presentation.rootpicker.RootFolderPickerScreen
 import com.vishalgupta.photoselector.presentation.designsystem.theme.AppTheme
 import kotlinx.coroutines.delay
@@ -48,6 +49,8 @@ fun App(container: AppContainer) {
     // The background Similarity pass keeps running across navigation; this is its off-grid hint. On the
     // Grid the tab ring + banner carry it, so the chip is shown only on the other screens.
     val groupingActivity by container.groupingActivity.collectAsState()
+    // The face scan keeps running across navigation too; this is its off-screen hint.
+    val faceScanActivity by container.faceScanActivity.collectAsState()
     val coroutineScope = rememberCoroutineScope()
 
     // App-lifetime, notify-only update checker. Built once and kept across navigation; the launch check
@@ -97,6 +100,7 @@ fun App(container: AppContainer) {
                     val railVm = remember(s.root.path) { container.libraryRailViewModel(s.root) }
                     val railEntries by railVm.entries.collectAsState()
                     val xmpSyncState by railVm.xmpSyncState.collectAsState()
+                    val peopleRailState by railVm.peopleState.collectAsState()
                     // Surface the reject-sweep result as a transient pill: only SET the message here.
                     // The auto-dismiss is an App-scoped effect (above) so it survives this Grid branch
                     // leaving composition (a sweep then Grid -> Browser within the timer).
@@ -155,6 +159,14 @@ fun App(container: AppContainer) {
                                 xmpSyncEnabled = xmpSyncState.enabled,
                                 xmpSyncSkippedNonRaw = xmpSyncState.skippedNonRaw,
                                 onToggleXmpSync = { railVm.toggleXmpSync() },
+                                people = peopleRailState,
+                                // No returnScrollIndex, exactly like the rail's category rows: the
+                                // grid's view model and scroll state are both retained across this
+                                // round trip, so a bare Screen.Grid back is already a warm return.
+                                onOpenPeople = {
+                                    container.goTo(Screen.People(root = s.root, returnScope = s.scope))
+                                },
+                                onScanFaces = railVm::startScan,
                                 onChangeFolder = changeFolder,
                             )
                         }
@@ -308,6 +320,20 @@ fun App(container: AppContainer) {
                         },
                     )
                 }
+                is Screen.People -> {
+                    // Full-screen with its own top bar: the library rail is mounted only in the Grid
+                    // branch above, so it (and the whole key(GridRetentionKey) block) leaves
+                    // composition here. Both the retained GridViewModel and the retained scroll state
+                    // survive that, so the bare Screen.Grid below is a warm return.
+                    val vm = remember(s.root.path) { container.peopleViewModel(s.root) }
+                    PeopleScreen(
+                        viewModel = vm,
+                        rootName = s.root.path.fileName?.toString() ?: s.root.path.toString(),
+                        imageLoader = container.imageLoader,
+                        onBack = { container.goTo(Screen.Grid(root = s.root, scope = s.returnScope)) },
+                        onPurgeFaceCache = container::clearFaceCache,
+                    )
+                }
                 is Screen.Inspect -> key(s) {
                     val vm = remember { container.inspectViewModel(s.root, s.scope, s.indices) }
                     InspectScreen(
@@ -356,7 +382,21 @@ fun App(container: AppContainer) {
             ) {
                 railSweepMessage?.let { PillToast(text = it) }
                 groupingActivity?.takeIf { screen !is Screen.Grid }?.let { activity ->
-                    BackgroundGroupingChip(processed = activity.processed, total = activity.total)
+                    BackgroundPassChip(
+                        label = "Grouping similar",
+                        processed = activity.processed,
+                        total = activity.total,
+                    )
+                }
+                // The face scan's off-screen twin, suppressed on People (its banner carries it there)
+                // the way the grouping chip is suppressed on the Grid.
+                faceScanActivity?.takeIf { screen !is Screen.People }?.let { activity ->
+                    BackgroundPassChip(
+                        label = "Finding faces",
+                        processed = activity.processed,
+                        total = activity.total,
+                        onStop = container::stopFaceScan,
+                    )
                 }
                 updateState.available?.let { available ->
                     UpdateAvailableBanner(

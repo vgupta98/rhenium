@@ -14,6 +14,8 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.unit.dp
 import com.vishalgupta.photoselector.data.image.ImageLoader
 import com.vishalgupta.photoselector.domain.model.Category
+import com.vishalgupta.photoselector.domain.model.CategoryKind
+import com.vishalgupta.photoselector.domain.model.CategoryRule
 import com.vishalgupta.photoselector.domain.model.CategoryId
 import com.vishalgupta.photoselector.domain.model.Photo
 import com.vishalgupta.photoselector.domain.model.PhotoGroup
@@ -22,6 +24,7 @@ import com.vishalgupta.photoselector.presentation.common.GroupingMode
 import com.vishalgupta.photoselector.presentation.designsystem.organism.LibraryRail
 import com.vishalgupta.photoselector.presentation.designsystem.theme.AppTheme
 import com.vishalgupta.photoselector.presentation.grid.GridScreen
+import com.vishalgupta.photoselector.presentation.grid.PeopleRailState
 import com.vishalgupta.photoselector.presentation.grid.GridUiState
 import com.vishalgupta.photoselector.presentation.navigation.CategoryScope
 import kotlinx.coroutines.CoroutineScope
@@ -205,6 +208,56 @@ class LibraryRailScreenshotTest {
         rule.dumpScreenshot("library-rail-smart-raw")
     }
 
+    @Test fun `rail shows a people section with named person rows, the backlog and the scan trigger`() {
+        // Eyeball build/screenshots/library-rail-people.png: under a "PEOPLE" section label, "Alice"
+        // and "Bob" each carry a person glyph, their photo count AND a "⋯" menu (unlike the Smart
+        // section's "RAW files", which stays menu-less because it isn't user-managed). Below them,
+        // "Name people · 4" is the naming backlog and "Scan for faces" is the trigger.
+        val alice = Category(
+            id = CategoryId("person-alice"),
+            name = "Alice",
+            builtIn = false,
+            kind = CategoryKind.SMART,
+            rule = CategoryRule.Person("alice"),
+        )
+        val bob = alice.copy(id = CategoryId("person-bob"), name = "Bob", rule = CategoryRule.Person("bob"))
+        val cats = listOf(Category.favourites(), Category.rejects(), Category.smartRaw(), alice, bob, keepers)
+        val members = memberships +
+            (Category.SMART_RAW_ID to setOf(photos[0].id, photos[2].id)) +
+            (alice.id to setOf(photos[0].id, photos[1].id, photos[3].id)) +
+            (bob.id to setOf(photos[4].id))
+        renderShell(
+            GridUiState(
+                photos = photos,
+                groups = photos.map(PhotoGroup::Single),
+                groupingMode = GroupingMode.Off,
+                scope = CategoryScope.Category(alice.id),
+                categories = cats,
+                memberships = members,
+            ),
+            people = PeopleRailState(available = true, scanning = false, unnamedCount = 4),
+        )
+        rule.dumpScreenshot("library-rail-people")
+    }
+
+    @Test fun `rail says face scanning is unavailable rather than hiding the section`() {
+        // Eyeball build/screenshots/library-rail-people-unavailable.png: the PEOPLE section is still
+        // there, with a dimmed, inert "Face scanning unavailable" row. Hiding it instead would make a
+        // packaged-build model/runtime regression read as "this folder simply has no faces".
+        renderShell(
+            GridUiState(
+                photos = photos,
+                groups = photos.map(PhotoGroup::Single),
+                groupingMode = GroupingMode.Off,
+                scope = CategoryScope.AllPhotos,
+                categories = categories,
+                memberships = memberships,
+            ),
+            people = PeopleRailState(available = false),
+        )
+        rule.dumpScreenshot("library-rail-people-unavailable")
+    }
+
     @Test fun `rail collapsed leaves the grid full-bleed`() {
         renderShell(
             GridUiState(
@@ -244,6 +297,7 @@ class LibraryRailScreenshotTest {
         railCollapsed: Boolean = false,
         xmpSyncEnabled: Boolean = false,
         xmpSyncSkippedNonRaw: Int = 0,
+        people: PeopleRailState = PeopleRailState(),
     ) {
         // Mirror the host: the rail sits beside the grid in a Row (and is simply absent when
         // collapsed). entries are derived from the same categories+memberships the grid carries, so a
@@ -267,6 +321,9 @@ class LibraryRailScreenshotTest {
                                 xmpSyncEnabled = xmpSyncEnabled,
                                 xmpSyncSkippedNonRaw = xmpSyncSkippedNonRaw,
                                 onToggleXmpSync = {},
+                                people = people,
+                                onOpenPeople = {},
+                                onScanFaces = {},
                                 onChangeFolder = {},
                             )
                         }

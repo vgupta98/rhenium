@@ -17,6 +17,14 @@ preferred way to verify UI changes that don't require the real app window
 (theming, layout, simple interactions). For things that need a live window
 (native file picker, DMG packaging), fall back to `./gradlew run`.
 
+**The capture window is a fixed 1024x768, and anything past it is silently
+clipped.** `ScreenshotSupport.kt` sets no size, so the desktop rule's default
+window governs: sizing your test's root `Surface` taller does **not** grow the
+frame, it just pushes content off the bottom edge — and the PNG still looks like
+a finished screenshot, so it eyeballs as complete. Keep a test root inside
+1024x768, and when a screen genuinely has more to show than that (several
+stacked sections), give each part its own test and PNG rather than one tall one.
+
 ## Checking for unnecessary recompositions
 
 Two complementary tools, both desktop-friendly (no Layout Inspector here):

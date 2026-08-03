@@ -28,8 +28,32 @@ interface PeopleRepository {
     /** Names (or renames) a person. A blank name clears it, returning them to "unnamed". */
     suspend fun rename(root: RootFolder, id: PersonId, name: String?)
 
+    /**
+     * Marks a person as (un)dismissed — the user's "skip"/"not a person" verdict on a cluster. Like
+     * [rename] this is user-authored, so it anchors the person through a rescan.
+     */
+    suspend fun setDismissed(root: RootFolder, id: PersonId, dismissed: Boolean)
+
     /** Forgets a person entirely. Called when their category is deleted, so the two never drift. */
     suspend fun delete(root: RootFolder, id: PersonId)
+
+    /**
+     * Forgets every person in [root] and removes the sidecar entirely — the storage half of "delete
+     * all face data".
+     *
+     * Unlike every other mutation this goes through even when the sidecar could not be *read* (see
+     * [isUnreadable]): the refuse-to-write posture exists to protect names the user might still want
+     * salvaged, and a deliberate purge is precisely the statement that they do not.
+     */
+    suspend fun deleteAll(root: RootFolder)
+
+    /**
+     * True when [root]'s sidecar exists but could not be decoded — corrupt, or written by a newer
+     * build. The set then reads as empty and **no mutation takes effect**, so a caller must surface
+     * this rather than report "scan complete, 12 people" over a write that was silently discarded.
+     * Mirrors [CategoriesRepository.isReadOnly], which exists for the same reason.
+     */
+    fun isUnreadable(root: RootFolder): StateFlow<Boolean>
 
     /**
      * Photos [id] appears in within [root], binding to it on demand (like [observePeople]), or

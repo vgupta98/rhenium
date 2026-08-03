@@ -37,7 +37,7 @@ class FaceCache(
 ) {
     private val blobs = ShardedBlobCache(
         cacheDir = cacheDir,
-        directoryName = "faces",
+        directoryName = DIRECTORY_NAME,
         fileExtension = FILE_EXTENSION,
         maxBytes = maxBytes,
     )
@@ -110,6 +110,28 @@ class FaceCache(
 
     companion object {
         /**
+         * Forgets every cached detection and embedding, for **every** root and every model id —
+         * the cache half of the user-facing "delete all face data" purge.
+         *
+         * A companion function taking the cache dir, deliberately, rather than a method on an
+         * instance: constructing a [FaceCache] needs both model ids, which means opening both ONNX
+         * sessions — an absurd price for *deleting* files, and exactly the lazy-loading trap the DI
+         * container is built to avoid. Nothing about the on-disk directory depends on the ids.
+         *
+         * All-or-nothing: entries key on a hash of an absolute path, so they cannot be filtered per
+         * root. Other roots keep their names but re-detect on their next scan — say that in the
+         * confirmation dialog.
+         */
+        fun clear(cacheDir: Path) {
+            ShardedBlobCache(
+                cacheDir = cacheDir,
+                directoryName = DIRECTORY_NAME,
+                fileExtension = FILE_EXTENSION,
+                maxBytes = DEFAULT_MAX_BYTES,
+            ).clear()
+        }
+
+        /**
          * Bump when the stored shape changes **or** when detection/alignment/embedding logic changes
          * in a way the model ids don't already capture (the cache holds those steps' output).
          * v1: initial.
@@ -117,6 +139,7 @@ class FaceCache(
         const val FORMAT_VERSION = 1
         const val DEFAULT_MAX_BYTES: Long = 128L * 1024 * 1024
         private const val MAGIC = 0x50534631 // "PSF1"
+        private const val DIRECTORY_NAME = "faces"
         private const val FILE_EXTENSION = "fce"
         private const val MAX_DIMENSIONS = 1 shl 16
         private const val MAX_FACES = 4096

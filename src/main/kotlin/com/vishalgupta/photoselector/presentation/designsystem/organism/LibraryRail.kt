@@ -20,6 +20,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.DeleteSweep
+import androidx.compose.material.icons.outlined.Groups
+import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.PersonSearch
 import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -44,7 +47,9 @@ import androidx.compose.ui.unit.dp
 import com.vishalgupta.photoselector.domain.model.Category
 import com.vishalgupta.photoselector.domain.model.CategoryId
 import com.vishalgupta.photoselector.domain.model.CategoryKind
+import com.vishalgupta.photoselector.domain.model.CategoryRule
 import com.vishalgupta.photoselector.presentation.common.categorySlotDigit
+import com.vishalgupta.photoselector.presentation.grid.PeopleRailState
 import com.vishalgupta.photoselector.presentation.designsystem.atom.FavouriteStar
 import com.vishalgupta.photoselector.presentation.designsystem.atom.RejectFlag
 import com.vishalgupta.photoselector.presentation.designsystem.molecule.CategoryActionsMenu
@@ -96,6 +101,13 @@ fun LibraryRail(
     xmpSyncEnabled: Boolean = false,
     xmpSyncSkippedNonRaw: Int = 0,
     onToggleXmpSync: (Boolean) -> Unit = {},
+    // The People section: the named-person categories are already in [entries] (they are smart
+    // categories), [people] carries everything else the section needs. Defaulted so the stateless rail
+    // (and older callers/tests) render without the face wiring — and default to *unavailable*, which
+    // is the honest answer when nothing wired a scanner in.
+    people: PeopleRailState = PeopleRailState(),
+    onOpenPeople: () -> Unit = {},
+    onScanFaces: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var showCreateDialog by remember { mutableStateOf(false) }
@@ -110,7 +122,12 @@ fun LibraryRail(
     // follow with their slot digit. Generalised over `builtIn`/`kind` rather than special-casing, so
     // a new built-in is one entry in Category.builtIns and a new smart rule one in Category.smartSeeds.
     val builtInEntries = entries.filter { it.first.builtIn }
-    val smartEntries = entries.filter { it.first.kind == CategoryKind.SMART }
+    // A named person is a smart category too, but it belongs under People (where it is renamable and
+    // deletable) rather than beside "RAW files", so it is split out of the Smart section by its rule.
+    val peopleEntries = entries.filter { it.first.rule is CategoryRule.Person }
+    val smartEntries = entries.filter {
+        it.first.kind == CategoryKind.SMART && it.first.rule !is CategoryRule.Person
+    }
     val customEntries = entries.filter { !it.first.builtIn && it.first.kind == CategoryKind.MANUAL }
     val rejectsCount = entries.firstOrNull { it.first.id == Category.REJECTS_ID }?.second ?: 0
 
@@ -183,6 +200,81 @@ fun LibraryRail(
                     },
                 )
             }
+        }
+
+        // People: the face pipeline's scopes. Unlike the Smart section above, a person row IS user
+        // managed — renaming it renames the person, deleting it forgets them — so these rows carry
+        // the same "⋯" menu the manual buckets do. The section is always present (never hidden on
+        // an unavailable scanner), so "we can't scan" never reads as "there is nobody here".
+        RailSectionLabel("People")
+        peopleEntries.forEach { (category, count) ->
+            RailRow(
+                label = category.name,
+                selected = scope.isCategory(category.id),
+                count = count,
+                onClick = { onSelectCategory(category.id) },
+                leading = {
+                    Icon(
+                        Icons.Outlined.Person,
+                        contentDescription = null,
+                        modifier = Modifier.size(AppTheme.dimens.iconSm),
+                    )
+                },
+                actions = {
+                    CategoryActionsMenu(
+                        categoryName = category.name,
+                        onRenameRequested = { renaming = category },
+                        onDeleteConfirmed = { onDeleteCategory(category.id) },
+                    )
+                },
+            )
+        }
+        if (people.available) {
+            RailRow(
+                label = "Name people",
+                selected = false,
+                // The count is the naming backlog, not a membership — the one place a rail count
+                // means "still to do". Hidden at zero so it isn't a permanent "0".
+                count = people.unnamedCount.takeIf { it > 0 },
+                onClick = onOpenPeople,
+                contentColor = AppTheme.colorScheme.onSurfaceVariant,
+                leading = {
+                    Icon(
+                        Icons.Outlined.Groups,
+                        contentDescription = null,
+                        modifier = Modifier.size(AppTheme.dimens.iconSm),
+                    )
+                },
+            )
+            RailRow(
+                label = if (people.scanning) "Scanning for faces…" else "Scan for faces",
+                selected = false,
+                onClick = onScanFaces,
+                enabled = !people.scanning,
+                contentColor = AppTheme.colorScheme.onSurfaceVariant,
+                leading = {
+                    Icon(
+                        Icons.Outlined.PersonSearch,
+                        contentDescription = null,
+                        modifier = Modifier.size(AppTheme.dimens.iconSm),
+                    )
+                },
+            )
+        } else {
+            RailRow(
+                label = "Face scanning unavailable",
+                selected = false,
+                onClick = {},
+                enabled = false,
+                contentColor = AppTheme.colorScheme.onSurfaceVariant,
+                leading = {
+                    Icon(
+                        Icons.Outlined.PersonSearch,
+                        contentDescription = null,
+                        modifier = Modifier.size(AppTheme.dimens.iconSm),
+                    )
+                },
+            )
         }
 
         RailSectionLabel("Categories")
@@ -367,6 +459,10 @@ private fun RailRow(
     count: Int? = null,
     actions: (@Composable () -> Unit)? = null,
     contentColor: Color = AppTheme.colorScheme.onSurface,
+    // An action row that exists but cannot be taken right now (a scan already running) or ever on this
+    // machine (no face models). Rendered dimmed and inert rather than hidden, so the affordance's
+    // absence is never mistaken for the feature having nothing to say.
+    enabled: Boolean = true,
 ) {
     val fill = if (selected) {
         AppTheme.colorScheme.onSurface.copy(alpha = 0.12f)
@@ -393,7 +489,7 @@ private fun RailRow(
             // selected. The row stays an *enabled* tab (not gated via clickable's `enabled`, which
             // would stamp a misleading `disabled` onto the selected tab) so assistive tech reads it
             // as the selected tab, not a dead control.
-            .clickable(onClick = { if (!selected) onClick() })
+            .clickable(enabled = enabled, onClick = { if (!selected) onClick() })
             .padding(start = AppTheme.spacing.sm, end = AppTheme.spacing.xs),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(AppTheme.spacing.sm),
@@ -402,7 +498,11 @@ private fun RailRow(
         Text(
             text = label,
             style = AppTheme.typography.bodyMedium,
-            color = if (selected) AppTheme.colorScheme.onSurface else contentColor,
+            color = when {
+                !enabled -> AppTheme.colorScheme.onSurface.copy(alpha = DISABLED_ROW_ALPHA)
+                selected -> AppTheme.colorScheme.onSurface
+                else -> contentColor
+            },
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
@@ -420,6 +520,9 @@ private fun RailRow(
 
 /** Uniform minimum height for a rail row, so the "⋯"-bearing custom rows align with the rest. */
 private val RAIL_ROW_MIN_HEIGHT = 40.dp
+
+/** Content alpha for an inert rail row — dimmed enough to read as unavailable, still legible. */
+private const val DISABLED_ROW_ALPHA = 0.38f
 
 /** True when this scope is the given category — the rail's active-row test. */
 private fun CategoryScope.isCategory(id: CategoryId): Boolean =

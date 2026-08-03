@@ -43,7 +43,7 @@ class FaceClustererTest {
         val people = cluster(mapOf(a to same, b to same, c to same))
 
         assertEquals(1, people.size)
-        assertEquals(setOf(a, b, c), people.single().faces.toSet())
+        assertEquals(setOf(a, b, c), people.single().faceIds.toSet())
         assertEquals(setOf(PhotoId("a"), PhotoId("b"), PhotoId("c")), people.single().photos)
     }
 
@@ -68,8 +68,8 @@ class FaceClustererTest {
 
         assertEquals(2, people.size, "A~B, B~C, A!~C must not collapse into one person")
         val together = people.first { it.faces.size == 2 }
-        assertEquals(setOf(a, b), together.faces.toSet())
-        assertEquals(listOf(c), people.first { it.faces.size == 1 }.faces)
+        assertEquals(setOf(a, b), together.faceIds.toSet())
+        assertEquals(listOf(c), people.first { it.faces.size == 1 }.faceIds)
     }
 
     @Test
@@ -77,7 +77,7 @@ class FaceClustererTest {
         val alice = Person(
             id = PersonId("alice"),
             name = "Alice",
-            faces = listOf(face("old")),
+            faces = listOf(FaceRef(face("old"))),
             centroid = listOf(1f, 0f),
         )
         val fresh = face("new")
@@ -87,13 +87,13 @@ class FaceClustererTest {
 
         val kept = assertNotNull(people.firstOrNull { it.id == PersonId("alice") })
         assertEquals("Alice", kept.name)
-        assertEquals(listOf(fresh), kept.faces)
+        assertEquals(listOf(fresh), kept.faceIds)
         assertEquals(1, people.size, "the re-matched face must not also spawn a new person")
     }
 
     @Test
     fun anUnnamedKnownPersonIsDiscardedAndRebuilt() {
-        val stale = Person(id = PersonId("stale"), name = null, faces = listOf(face("x")), centroid = listOf(1f, 0f))
+        val stale = Person(id = PersonId("stale"), name = null, faces = listOf(FaceRef(face("x"))), centroid = listOf(1f, 0f))
 
         val people = cluster(mapOf(face("y") to vec(0.0)), known = listOf(stale))
 
@@ -102,8 +102,29 @@ class FaceClustererTest {
     }
 
     @Test
+    fun aDismissedClusterSurvivesAReclusterJustLikeANamedOne() {
+        // "Not a person" / "Skip" is user work too: without anchoring it, a rescan mid-naming
+        // renumbers the anonymous clusters and every dismissal the user made is silently undone.
+        val skipped = Person(
+            id = PersonId("skipped"),
+            name = null,
+            faces = listOf(FaceRef(face("old"))),
+            centroid = listOf(1f, 0f),
+            dismissed = true,
+        )
+        val fresh = face("new")
+
+        val people = cluster(mapOf(fresh to vec(5.0)), known = listOf(skipped))
+
+        val kept = assertNotNull(people.firstOrNull { it.id == PersonId("skipped") })
+        assertTrue(kept.dismissed)
+        assertEquals(listOf(fresh), kept.faceIds)
+        assertEquals(1, people.size, "the re-matched face must not also spawn a new person")
+    }
+
+    @Test
     fun aNamedPersonWithNoSurvivingFacesKeepsItsCentroidForALaterScan() {
-        val bob = Person(PersonId("bob"), name = "Bob", faces = listOf(face("gone")), centroid = listOf(1f, 0f))
+        val bob = Person(PersonId("bob"), name = "Bob", faces = listOf(FaceRef(face("gone"))), centroid = listOf(1f, 0f))
 
         val people = cluster(mapOf(face("other") to vec(90.0)), known = listOf(bob))
 
@@ -114,8 +135,8 @@ class FaceClustererTest {
 
     @Test
     fun anEmptyScanKeepsOnlyTheNamedPeople() {
-        val named = Person(PersonId("n"), name = "Named", faces = listOf(face("a")), centroid = listOf(1f, 0f))
-        val unnamed = Person(PersonId("u"), name = null, faces = listOf(face("b")), centroid = listOf(0f, 1f))
+        val named = Person(PersonId("n"), name = "Named", faces = listOf(FaceRef(face("a"))), centroid = listOf(1f, 0f))
+        val unnamed = Person(PersonId("u"), name = null, faces = listOf(FaceRef(face("b"))), centroid = listOf(0f, 1f))
 
         val people = FaceClusterer.cluster(
             faces = emptyList(),
@@ -137,7 +158,7 @@ class FaceClustererTest {
             newPersonId = ids,
         )
 
-        assertEquals(listOf(listOf(embedded)), people.map { it.faces })
+        assertEquals(listOf(listOf(embedded)), people.map { it.faceIds })
     }
 
     @Test
@@ -226,7 +247,7 @@ class FaceClustererTest {
                 embeddings = embeddings,
                 rule = FaceClusterer.ThresholdRule { cut },
                 newPersonId = ids,
-            ).map { it.faces.toSet() }.toSet()
+            ).map { it.faceIds.toSet() }.toSet()
 
             val expected = naiveAverageLinkage(faces, embeddings, cut)
 
@@ -279,9 +300,9 @@ class FaceClustererTest {
         )
 
         counter = 0
-        val first = cluster(input).map { it.faces.toSet() }.toSet()
+        val first = cluster(input).map { it.faceIds.toSet() }.toSet()
         counter = 0
-        val second = cluster(input).map { it.faces.toSet() }.toSet()
+        val second = cluster(input).map { it.faceIds.toSet() }.toSet()
 
         assertEquals(first, second)
         assertEquals(2, first.size)

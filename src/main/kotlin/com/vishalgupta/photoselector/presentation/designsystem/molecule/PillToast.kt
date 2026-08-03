@@ -49,7 +49,8 @@ object PillToastDefaults {
 }
 
 /**
- * A rounded pill containing an optional [leadingIcon] slot and a [text] label.
+ * A rounded pill containing an optional [leadingIcon] slot, a [text] label and an optional
+ * [trailingIcon] slot (an action the pill offers, e.g. stopping the pass it is reporting on).
  * Used for transient confirmations (e.g. favourited / unfavourited).
  */
 @Composable
@@ -58,6 +59,7 @@ fun PillToast(
     modifier: Modifier = Modifier,
     leadingIcon: (@Composable () -> Unit)? = null,
     colors: PillToastColors = PillToastDefaults.neutralColors(),
+    trailingIcon: (@Composable () -> Unit)? = null,
 ) {
     Surface(
         modifier = modifier,
@@ -74,6 +76,7 @@ fun PillToast(
         ) {
             leadingIcon?.invoke()
             Text(text, style = MaterialTheme.typography.labelLarge)
+            trailingIcon?.invoke()
         }
     }
 }

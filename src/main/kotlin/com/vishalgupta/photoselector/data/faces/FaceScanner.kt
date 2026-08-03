@@ -55,15 +55,15 @@ class FaceScanner(
 ) {
 
     /**
-     * Scans [photos] and returns the people found. [known] is the previous result — its **named**
-     * entries keep their identity through the recluster (see [FaceClusterer.cluster]).
+     * Scans [photos] and returns the people found. [known] is the previous result — its **anchors**
+     * (named or dismissed) keep their identity through the recluster (see [FaceClusterer.cluster]).
      */
     suspend fun scan(
         photos: List<Photo>,
         known: List<Person> = emptyList(),
         onProgress: FaceScanProgress = { _, _ -> },
     ): List<Person> {
-        if (photos.isEmpty()) return known.filter { it.isNamed }.map { it.copy(faces = emptyList()) }
+        if (photos.isEmpty()) return known.filter { it.isAnchor }.map { it.copy(faces = emptyList()) }
         val total = photos.size
         val perPhoto = ConcurrentHashMap<Photo, PhotoFaces>(total)
         val processed = AtomicInteger(0)
@@ -85,21 +85,34 @@ class FaceScanner(
         // therefore an unnamed cluster's contents) are deterministic for a given photo set.
         val faces = ArrayList<FaceId>()
         val embeddings = HashMap<FaceId, FaceEmbedding>()
+        val detections = HashMap<FaceId, FaceDetection>()
         for (photo in photos) {
             val found = perPhoto[photo] ?: continue
             found.detections.indices.forEach { i ->
                 val id = FaceId(photo.id, i)
                 faces += id
                 embeddings[id] = found.embeddings[i]
+                detections[id] = found.detections[i]
             }
         }
-        return FaceClusterer.cluster(
+        val people = FaceClusterer.cluster(
             faces = faces,
             embeddings = embeddings,
             known = known,
             rule = rule,
             newPersonId = newPersonId,
         )
+        // The clusterer is pure and only ever sees identities; hand each face back the box and score
+        // its detection carries, so the naming UI can crop a face without reopening the models to
+        // compose a face-cache key (and without depending on that size-capped cache still holding it).
+        return people.map { person ->
+            person.copy(
+                faces = person.faces.map { ref ->
+                    val detection = detections[ref.id] ?: return@map ref
+                    ref.copy(box = detection.box, score = detection.score)
+                },
+            )
+        }
     }
 
     /** One photo's faces, from cache or freshly computed. Null when detection failed (so it isn't cached). */

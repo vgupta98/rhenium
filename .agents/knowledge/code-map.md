@@ -45,12 +45,16 @@ architecture, single Gradle module: `domain` (pure) → `data` (impls) →
   default adds same-moment frames via the capture-time gap, `VisualOnly` the
   no-time fallback), `CaptureMetadata` + `CaptureMetadataSource`.
 - `faces/` — the face pipeline's pure half, mirroring `grouping/`: `Face.kt` (`FaceId`,
+  `FaceRef` — a face id plus its normalised box and detector score, what a `Person` carries and the
+  sidecar stores, so a crop needs neither the models nor the face cache —
   `FaceBox`/`FacePoint`, `FaceDetection`, the `FaceEmbedding` value class, `PhotoFaces`),
-  `Person.kt` (`PersonId`, `Person`), the `FaceDetector` / `FaceEmbedder` seams, and three
+  `Person.kt` (`PersonId`, `Person`; `name` + `dismissed` are the user-authored fields, with
+  `isAnchor`/`coverFace` derived from them), the `FaceDetector` / `FaceEmbedder` seams, and three
   algorithm objects: `YuNetPostProcessing` (grid decode + NMS + letterbox mapping, ported from
   OpenCV's `face_detect.cpp`), `FaceAlignment` (5-point similarity transform onto SFace's
   112x112 template), `FaceClusterer` (average-linkage agglomerative over cosine distance behind a
-  `ThresholdRule` seam; a recluster re-matches named people by centroid first).
+  `ThresholdRule` seam; a recluster re-matches every **anchor** — named *or* dismissed — by centroid
+  first, so neither a name nor a "not a person" verdict is lost to a rescan).
   `PersonCategoryRuleResolver` bridges a person to a smart category.
 - `format/` — `PhotoDecoder`, `PhotoFormat`, `PhotoFormatRegistry` interfaces.
 - `update/` — the notify-only update checker: `AppVersion` (tolerant SemVer +
@@ -90,7 +94,10 @@ architecture, single Gradle module: `domain` (pure) → `data` (impls) →
   null-on-failure shape as `OnnxEmbeddingModel`, lazily constructed in DI; `FaceCache` (per-photo
   detections + embeddings); `FaceScanner` (the bounded-parallel whole-root pass, structured like
   `SimilarityPhotoGrouper.group`); `JsonPeopleRepository` + `PeopleFile` (the v1
-  `.photo-selector-people.json` sidecar, unknown fields carried through a rewrite).
+  `.photo-selector-people.json` sidecar, unknown fields carried through a rewrite; `FaceRefDto`
+  gained additive `box`/`score` and `PersonDto` an additive `dismissed`, still v1. `isUnreadable` is
+  the can't-read-so-every-write-is-discarded signal the UI must surface; `deleteAll` is the one
+  mutation that deliberately overrides the refuse-to-write posture, for the purge).
 - `prefs/` — `JsonAppPreferences` (global one-off flags: the first-run Similarity
   coachmark "seen" bit, plus the update checker's opt-out / skipped-version / stable
   rollout install-id; one small JSON via `AtomicJsonWriter`). Per-root
@@ -109,11 +116,12 @@ architecture, single Gradle module: `domain` (pure) → `data` (impls) →
 - `io/` — `AtomicJsonWriter` (shared atomic JSON write; categories + browse) and
   `ShardedBlobCache` (the shared hash -> shard -> atomic-write -> size-capped-eviction mechanics
   behind `EmbeddingCache` / `GroupingResultCache` / `FaceCache`; each cache keeps its **own** key
-  composition, which is byte-pinned by golden-key tests).
+  composition, which is byte-pinned by golden-key tests. `clear()` is the all-or-nothing purge
+  primitive — keys are hashes this class never inspects, so nothing can be selected per root).
 
 ## presentation/ — Compose + view models, by screen
 
-- `navigation/` — `Screen` (sealed: `RootPicker | Grid | Browser | Inspect`),
+- `navigation/` — `Screen` (sealed: `RootPicker | Grid | Browser | Inspect | People`),
   `InspectOrigin`, `CategoryScope`.
 - `StateHolder.kt` — base view-model plumbing.
 - `rootpicker/` — `RootFolderPickerScreen` + `…ViewModel`.
@@ -122,7 +130,8 @@ architecture, single Gradle module: `domain` (pure) → `data` (impls) →
   (render; defines `tileIndexForFlat`, the tile↔flat translation),
   `LibraryRailViewModel`
   (root-scoped: feeds the hoisted `LibraryRail` its category+count entries and
-  owns create/rename/delete — see organism `LibraryRail`),
+  owns create/rename/delete — see organism `LibraryRail`; also owns `PeopleRailState` and
+  `startScan()`, which back the rail's People section),
   `GridDisplayModel` (top-level tile-index *helpers*, not a class —
   `displayGroupsFor`/`buildRenderItems` explode the open burst into per-frame
   tiles, plus `renderIndexForTile` etc.), `GridViewportAnchor` (scroll anchoring),
@@ -142,14 +151,23 @@ architecture, single Gradle module: `domain` (pure) → `data` (impls) →
   `survey/` and `browser/` view models as its two facets.
 - `survey/` — `SurveyScreen` + `…ViewModel`: Inspect's overview-grid facet
   (fit-to-cell pick, no zoom).
+- `people/` — `PeopleScreen` (full-screen naming surface: cluster cards with a face crop, an inline
+  name field and the Skip / "Not a person" verdicts; a "⋯" overflow holds the face-data purge) +
+  `PeopleViewModel` (`PersonCard` / `PeopleUiState`; owns the person <-> smart-category join, the
+  duplicate-name guard and the three-store purge).
 - `update/` — `UpdateViewModel`: app-lifetime, notify-only. Runs one launch check, applies
   the user's skipped-version choice, and turns banner actions into a browser open. Mounted by
   `App` as a bottom-end overlay (`UpdateAvailableBanner`).
 - `common/` — non-UI plumbing: `NativeFileDialogs`, `MacSystemActions` /
   `SystemActions`, `CategoryHotkeys`, `CategoryToggle`, `GroupingMode`,
-  `GroupingCoordinator` (owns the one background Similarity pass, decoupled from
-  any grid's displayed lens — survives lens switches and navigation; exposes a
-  `progress` flow for the off-grid hint), `XmpSyncCoordinator` (root-scoped,
+  `BackgroundPassCoordinator<R>` (the shared one-long-pass mechanism: slice dedup,
+  supersede-by-generation, the 200 ms progress grace window, monotonic progress coalescing,
+  `reset`/`cancel`; owns `Progress`) with two thin typed facades over it —
+  `GroupingCoordinator` (the background Similarity pass, decoupled from
+  any grid's displayed lens; survives lens switches and navigation and exposes a
+  `progress` flow for the off-grid hint) and `FaceScanCoordinator` (the whole-root face scan;
+  container-level like grouping, and it resolves the lazily-loaded ONNX models *inside* the pass, so
+  `available` latches only once a scan has actually run), `XmpSyncCoordinator` (root-scoped,
   retained per root; when enabled, runs a full whole-root reconcile then live
   delta-writes RAW sidecars on membership changes — mirrors `GroupingCoordinator`'s
   lifecycle; drives `ExportPhotosXmpUseCase`), `HoverOverlay`, `PlatformLabels`,
@@ -161,14 +179,17 @@ architecture, single Gradle module: `domain` (pure) → `data` (impls) →
 - `theme/` — tokens: `AppColors`/`Spacing`/`Dimens` read via `AppTheme.*` (those
   three only); `AppTypography`/`AppShapes` go via `MaterialTheme`. Files:
   `Color`, `Spacing`, `Dimens`, `Type`, `Shape`.
-- `atom/` — `Buttons`, `FavouriteStar`, `RejectFlag`, `LoadingIndicator`,
+- `atom/` — `Buttons`, `FavouriteStar`, `RejectFlag`, `LoadingIndicator`, `FaceCrop` (a face
+  blitted out of its photo at the stored normalised box — padded, squared and clamped by the pure
+  `faceCropRect`; rides the shared thumbnail cache, no second cache),
   `TileSignal` (the shared overlay-chrome chip `TileSignalChip` that the tile's
   burst/review/category badges all build on, plus the feature-agnostic
   `TileSignal` model + tint role that a tile's bottom-center signal lane renders).
 - `molecule/` — incl. `GroupingModeToggle` (lens segments + hover tooltips; the
   Similar segment carries a determinate ring while the background pass runs),
-  `GroupingProgressBanner` (cold-pass framing), `BackgroundGroupingChip` (the
-  off-grid "still grouping" pill, composed from `PillToast`),
+  `GroupingProgressBanner` (cold-pass framing; takes a `label` and an optional `onStop`),
+  `BackgroundPassChip` (the off-screen "still working" pill for either long pass — `label` plus an
+  optional `onStop`, composed from `PillToast`),
   `UpdateAvailableBanner` (the bottom-end "new version ready" card; notify-only),
   `SimilarityCoachmark` (first-run
   callout), `BurstExpandedHeader`/`Footer`, the `*KeyboardLegend` set,
@@ -201,7 +222,7 @@ architecture, single Gradle module: `domain` (pure) → `data` (impls) →
 | Decoding a new format | `domain/format/PhotoDecoder.kt`, `data/format/DefaultPhotoFormatRegistry.kt`, register in `di/AppContainer.kt` |
 | HEIC / RAW specifics | `data/format/HeicDecoder.kt`, `data/format/RawDecoder.kt`, `data/format/macos/MacImageIO.kt` |
 | Similarity embeddings / model swap | `data/ai/OnnxEmbeddingModel.kt`, `data/ai/EmbeddingCache.kt`, `tools/embedding-model/` |
-| Faces / people (detect, cluster, name) | `domain/faces/`, `data/faces/`, `domain/repository/PeopleRepository.kt`, `di/AppContainer.kt` (lazy sessions + the composite rule resolver), `tools/face-models/` |
+| Faces / people (detect, cluster, name) | `domain/faces/`, `data/faces/`, `domain/repository/PeopleRepository.kt`, `presentation/people/`, `presentation/common/FaceScanCoordinator.kt`, `designsystem/atom/FaceCrop.kt`, `di/AppContainer.kt` (lazy sessions + the composite rule resolver), `tools/face-models/` |
 | Inspect (grid + browse toggle) | `presentation/inspect/`, `presentation/survey/`, `presentation/browser/` |
 | Adding a screen | `presentation/navigation/Screen.kt`, `App.kt`, `di/AppContainer.kt` |
 | Theming / new shared component | `presentation/designsystem/` (theme → atom → molecule → organism) |

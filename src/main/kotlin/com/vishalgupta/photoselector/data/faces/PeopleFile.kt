@@ -10,16 +10,30 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
-/** A face reference as persisted: the photo's stable id plus its index within that photo's detections. */
+/**
+ * A face reference as persisted: the photo's stable id plus its index within that photo's detections,
+ * and — additively, so the file stays v1 — where the face sits on that photo ([box], normalised
+ * `x,y,w,h`) plus the detector's [score].
+ *
+ * The box is stored rather than re-read from the face cache because composing that cache's key needs
+ * both ONNX model ids, which would force the sessions open just to draw a crop; and the cache is
+ * size-capped, so an old entry may have been evicted while the person is still on screen. All four
+ * default, so a file written before boxes were stored still decodes (with no drawable crop).
+ */
 @Serializable
-data class FaceRefDto(val photo: String, val index: Int = 0)
+data class FaceRefDto(
+    val photo: String,
+    val index: Int = 0,
+    val box: List<Float>? = null,
+    val score: Float = 0f,
+)
 
 /**
  * A person as persisted in the v1 people file.
  *
- * [name] is the only user-authored field — everything else is derived and a rescan rewrites it.
- * [centroid] is stored so a *named* person can be re-matched even after the photos that originally
- * defined them leave the root.
+ * [name] and [dismissed] are the user-authored fields — everything else is derived and a rescan
+ * rewrites it. [centroid] is stored so an *anchored* person (named or dismissed) can be re-matched
+ * even after the photos that originally defined them leave the root.
  */
 @Serializable
 data class PersonDto(
@@ -27,6 +41,7 @@ data class PersonDto(
     val name: String? = null,
     val faces: List<FaceRefDto> = emptyList(),
     val centroid: List<Float> = emptyList(),
+    val dismissed: Boolean = false,
 )
 
 /**

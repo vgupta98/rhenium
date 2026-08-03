@@ -2,6 +2,7 @@ package com.vishalgupta.photoselector.data.faces
 
 import com.vishalgupta.photoselector.domain.faces.FaceClusterer
 import com.vishalgupta.photoselector.domain.faces.FaceId
+import com.vishalgupta.photoselector.domain.faces.FaceRef
 import com.vishalgupta.photoselector.domain.faces.Person
 import com.vishalgupta.photoselector.domain.faces.PersonId
 import com.vishalgupta.photoselector.domain.model.Photo
@@ -127,7 +128,7 @@ class FaceScannerTest {
         val alice = Person(
             id = PersonId("alice"),
             name = "Alice",
-            faces = listOf(FaceId(PhotoId("older"), 0)),
+            faces = listOf(FaceRef(FaceId(PhotoId("older"), 0))),
             centroid = listOf(1f, 0f),
         )
 
@@ -140,8 +141,8 @@ class FaceScannerTest {
 
     @Test
     fun scan_ofNoPhotosKeepsOnlyNamedPeople() = runTest {
-        val named = Person(PersonId("n"), name = "Named", faces = listOf(FaceId(PhotoId("x"), 0)), centroid = listOf(1f, 0f))
-        val unnamed = Person(PersonId("u"), name = null, faces = listOf(FaceId(PhotoId("y"), 0)), centroid = listOf(0f, 1f))
+        val named = Person(PersonId("n"), name = "Named", faces = listOf(FaceRef(FaceId(PhotoId("x"), 0))), centroid = listOf(1f, 0f))
+        val unnamed = Person(PersonId("u"), name = null, faces = listOf(FaceRef(FaceId(PhotoId("y"), 0))), centroid = listOf(0f, 1f))
 
         val people = scanner().scan(emptyList(), known = listOf(named, unnamed))
 

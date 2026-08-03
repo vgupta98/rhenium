@@ -70,6 +70,22 @@ class ShardedBlobCache(
         }
     }
 
+    /**
+     * Deletes every entry, shards and all — the "forget this whole cache" primitive a user-facing
+     * purge needs. Deliberately all-or-nothing: entries are keyed by a hash of an already-composed
+     * key string this class never inspects, so there is no way to select the subset belonging to one
+     * root (or one model). Best-effort, like every other write path here; a file that resists
+     * deletion just costs a stale entry, never an error.
+     */
+    fun clear() {
+        if (!root.exists()) return
+        try {
+            root.toFile().walkBottomUp().forEach { it.delete() }
+        } catch (_: Throwable) {
+            // Same posture as eviction: the cache is an optimisation, never a source of truth.
+        }
+    }
+
     /** The on-disk path [key] maps to. Exposed for tests that pin the layout. */
     fun fileFor(key: String): Path {
         val hash = sha256Hex(key)

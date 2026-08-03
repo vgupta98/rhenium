@@ -106,23 +106,30 @@ class SkikoImageLoader(
         cache.unpinAllExcept(id)
     }
 
-    private fun DecodedImage.toImageBitmap(): ImageBitmap {
-        val info = ImageInfo(
-            colorInfo = ColorInfo(
-                colorType = ColorType.BGRA_8888,
-                alphaType = ColorAlphaType.PREMUL,
-                colorSpace = ColorSpace.sRGB,
-            ),
-            width = width,
-            height = height,
-        )
-        val bitmap = Bitmap()
-        bitmap.allocPixels(info)
-        bitmap.installPixels(info, bgraBytes, info.minRowBytes)
-        return bitmap.asComposeImageBitmap()
-    }
-
     companion object {
         const val DEFAULT_MAX_CACHE_BYTES: Long = 512L * 1024 * 1024
     }
+}
+
+/**
+ * Wraps a decoded BGRA buffer as a Compose [ImageBitmap] without copying the pixels again.
+ *
+ * Top-level and `internal` rather than private to the loader so tests can build a real bitmap from a
+ * `testing/ImageFixtures` buffer through the *same* conversion the app uses — a screenshot test that
+ * hand-rolled its own would stop covering this step.
+ */
+internal fun DecodedImage.toImageBitmap(): ImageBitmap {
+    val info = ImageInfo(
+        colorInfo = ColorInfo(
+            colorType = ColorType.BGRA_8888,
+            alphaType = ColorAlphaType.PREMUL,
+            colorSpace = ColorSpace.sRGB,
+        ),
+        width = width,
+        height = height,
+    )
+    val bitmap = Bitmap()
+    bitmap.allocPixels(info)
+    bitmap.installPixels(info, bgraBytes, info.minRowBytes)
+    return bitmap.asComposeImageBitmap()
 }
