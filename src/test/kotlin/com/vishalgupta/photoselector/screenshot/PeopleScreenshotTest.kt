@@ -33,12 +33,17 @@ import kotlin.test.assertTrue
 /**
  * The People screen in every branch it has. Eyeball the PNGs under `build/screenshots/`:
  *  - `people-unnamed`: a "TO NAME" section of cluster cards — a face crop, a photo count, an inline
- *    name field, and the Skip / "Not a person" verdicts. The top bar shows the naming backlog.
- *  - `people-mixed`: TO NAME, NAMED (the field pre-filled, the action reading "Rename") and SKIPPED
- *    (with "Bring back") together, so the three sections' cards line up across one grid.
+ *    name field, and the single "Skip" verdict. The top bar shows the naming backlog.
+ *  - `people-mixed`: TO NAME above NAMED (the field pre-filled, its commit riding the field's
+ *    check), sharing one grid so the cards line up across the section break.
+ *  - `people-skipped`: the third section, "SKIPPED / NOT PEOPLE", with its "Bring back" action. It
+ *    gets its own frame because the headless capture window is a fixed 1024x768 and all three
+ *    sections do not fit at once.
  *  - `people-empty`: nothing scanned yet — the CTA, not an error.
  *  - `people-unavailable`: the **hard-requirement** state. A packaged build with a stripped runtime
  *    or a missing model resource must read as "face scanning unavailable", never as "no faces here".
+ *  - `people-unavailable-with-people`: the same signal as a *notice*, because already-named people
+ *    must never be hidden behind it.
  *  - `people-scanning`: the determinate cold-pass banner with its Stop action.
  *  - `people-purge-confirm`: the destructive confirm, which must name the count *and* say plainly
  *    that the shared face cache is cleared for every folder.
@@ -81,7 +86,7 @@ class PeopleScreenshotTest {
         coverBox = FaceBox(x = 0.30f, y = 0.20f, width = 0.22f, height = 0.30f),
     )
 
-    @Test fun `unnamed clusters offer a crop, a name field and both verdicts`() {
+    @Test fun `unnamed clusters offer a crop, a name field and one verdict`() {
         render(
             PeopleUiState(
                 toName = listOf(
@@ -105,6 +110,20 @@ class PeopleScreenshotTest {
         rule.dumpScreenshot("people-mixed")
     }
 
+    @Test fun `a skipped cluster keeps its crop and offers a way back`() {
+        // The third section, in its own frame: the headless capture window is a fixed 1024x768, so
+        // all three sections never fit at once. Eyeball build/screenshots/people-skipped.png - the
+        // label reads "SKIPPED / NOT PEOPLE" (naming both readings of the one stored verdict) and
+        // the card's only action is "Bring back".
+        render(
+            PeopleUiState(
+                named = listOf(card("p2", "Alice", 88, "b")),
+                skipped = listOf(card("p4", null, 5, "d")),
+            ),
+        )
+        rule.dumpScreenshot("people-skipped")
+    }
+
     @Test fun `nothing scanned yet reads as a call to action, not an error`() {
         render(PeopleUiState())
         rule.dumpScreenshot("people-empty")
@@ -116,6 +135,20 @@ class PeopleScreenshotTest {
         // instead, the smoke test has lost its only signal.
         render(PeopleUiState(available = false))
         rule.dumpScreenshot("people-unavailable")
+    }
+
+    @Test fun `unavailable models never hide people who are already named`() {
+        // Regression: the unavailable placeholder used to replace the whole content, so a user with
+        // named people saw their entire list vanish behind "no faces can be found" while the sidecar
+        // and the rail still held them. Eyeball build/screenshots/people-unavailable-with-people.png:
+        // the warning is a notice ABOVE the grid, and Alice and Bob are still on screen.
+        render(
+            PeopleUiState(
+                available = false,
+                named = listOf(card("p2", "Alice", 88, "b"), card("p3", "Bob", 12, "c")),
+            ),
+        )
+        rule.dumpScreenshot("people-unavailable-with-people")
     }
 
     @Test fun `a scan in progress shows a determinate banner with a stop`() {

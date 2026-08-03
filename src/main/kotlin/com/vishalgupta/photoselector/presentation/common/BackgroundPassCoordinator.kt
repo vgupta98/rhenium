@@ -85,9 +85,6 @@ class BackgroundPassCoordinator<R>(
      */
     val activeGeneration: Int get() = generation
 
-    /** True while a pass is in flight — the signal a "Stop" affordance is gated on. */
-    val isRunning: Boolean get() = synchronized(lock) { current?.isActive == true }
-
     /**
      * The pass over [photos], starting it (in this coordinator's own scope) if none is already running
      * for this exact slice. Idempotent per slice — a repeat attaches to the in-flight pass — and a

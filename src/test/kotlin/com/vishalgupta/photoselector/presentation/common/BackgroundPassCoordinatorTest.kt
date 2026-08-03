@@ -14,9 +14,9 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * The parts of the shared pass mechanism that [GroupingCoordinatorTest] does not reach, because
- * grouping does not expose them: the user-initiated [BackgroundPassCoordinator.cancel] the face scan
- * needs, and [BackgroundPassCoordinator.isRunning], which gates the Stop affordance.
+ * The part of the shared pass mechanism that [GroupingCoordinatorTest] does not reach, because
+ * grouping does not expose it: the user-initiated [BackgroundPassCoordinator.cancel] behind the face
+ * scan's Stop action.
  *
  * Everything else (slice dedup, supersede, the grace window, monotonic progress) is exercised through
  * the grouping facade, deliberately — those are the behaviours the Similarity path already relied on
@@ -52,13 +52,13 @@ class BackgroundPassCoordinatorTest {
         val first = coordinator.passFor(photos)
         advanceUntilIdle() // past the grace window, so the bar is armed
         assertEquals(BackgroundPassCoordinator.Progress(1, photos.size), coordinator.progress.value)
-        assertTrue(coordinator.isRunning)
+        assertTrue(first.isActive)
 
         coordinator.cancel()
 
         assertNull(coordinator.progress.value, "a stopped pass must not leave its bar on screen")
-        assertFalse(coordinator.isRunning)
-        assertTrue(first.isCancelled)
+        assertTrue(first.isCancelled, "the in-flight pass itself is cancelled, not just its bar")
+        assertFalse(first.isActive)
 
         // And the *same* slice starts a fresh pass afterwards rather than re-attaching to the dead
         // one — otherwise "Stop" would be a one-way door for that folder.
@@ -71,24 +71,25 @@ class BackgroundPassCoordinatorTest {
     }
 
     @Test
-    fun isRunningIsFalseOnceThePassCompletes() = runTest {
+    fun aCompletedPassClearsItsProgressAndReturnsItsResult() = runTest {
         val gate = CompletableDeferred<Unit>()
         val coordinator = BackgroundPassCoordinator<Int>(
             parentJob = null,
             dispatcher = StandardTestDispatcher(testScheduler),
-        ) { _, _ ->
+        ) { photos, onProgress ->
+            onProgress(1, photos.size)
             gate.await()
-            0
+            photos.size
         }
 
-        coordinator.passFor(photos)
+        val pass = coordinator.passFor(photos)
         advanceUntilIdle()
-        assertTrue(coordinator.isRunning)
+        assertTrue(pass.isActive)
 
         gate.complete(Unit)
         advanceUntilIdle()
 
-        assertFalse(coordinator.isRunning)
-        assertNull(coordinator.progress.value)
+        assertEquals(photos.size, pass.await())
+        assertNull(coordinator.progress.value, "a finished pass leaves no bar behind")
     }
 }

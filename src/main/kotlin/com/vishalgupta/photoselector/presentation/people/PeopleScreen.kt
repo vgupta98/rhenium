@@ -151,12 +151,17 @@ fun PeopleScreen(
             scanning = state.scanning != null,
             available = state.available,
             hasPeople = !state.isEmpty,
+            purging = state.purging,
             onBack = onBack,
             onScan = onScan,
             onPurgeRequested = { confirmingPurge = true },
         )
 
         state.nameError?.let { NoticeRow(it) }
+        // Models unavailable, but people already named: say so in a notice and keep the list. The
+        // full-screen placeholder below would otherwise hide a dozen named people behind "no faces
+        // can be found" — a "my data is gone" moment, when the sidecar and the rail still have them.
+        if (!state.available && !state.isEmpty) NoticeRow(MODELS_UNAVAILABLE_MESSAGE)
         if (state.unreadable) {
             // The sidecar exists but cannot be decoded, so every write is discarded. Saying so is the
             // whole point of the signal: otherwise a scan reports "found 12 people" over nothing.
@@ -175,7 +180,7 @@ fun PeopleScreen(
         }
 
         when {
-            !state.available -> ModelsUnavailable(Modifier.fillMaxSize())
+            !state.available && state.isEmpty -> ModelsUnavailable(Modifier.fillMaxSize())
             state.isEmpty -> NoPeopleYet(
                 scanning = state.scanning != null,
                 onScan = onScan,
@@ -226,6 +231,7 @@ private fun PeopleTopBar(
     scanning: Boolean,
     available: Boolean,
     hasPeople: Boolean,
+    purging: Boolean,
     onBack: () -> Unit,
     onScan: () -> Unit,
     onPurgeRequested: () -> Unit,
@@ -259,13 +265,17 @@ private fun PeopleTopBar(
             onClick = onScan,
             enabled = available && !scanning,
         )
-        PeopleActionsMenu(onPurgeRequested = onPurgeRequested)
+        PeopleActionsMenu(purging = purging, onPurgeRequested = onPurgeRequested)
     }
 }
 
-/** The screen's "⋯" overflow. One item today; it is where anything else library-wide would land. */
+/**
+ * The screen's "⋯" overflow. One item today; it is where anything else library-wide would land.
+ * The item goes inert (and says so) while a purge is running: it spans three stores, so re-entering
+ * it mid-flight would race the delete that is already under way.
+ */
 @Composable
-private fun PeopleActionsMenu(onPurgeRequested: () -> Unit) {
+private fun PeopleActionsMenu(purging: Boolean, onPurgeRequested: () -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { expanded = true }) {
@@ -273,7 +283,8 @@ private fun PeopleActionsMenu(onPurgeRequested: () -> Unit) {
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             DropdownMenuItem(
-                text = { Text("Delete all face data…") },
+                text = { Text(if (purging) "Deleting face data…" else "Delete all face data…") },
+                enabled = !purging,
                 onClick = {
                     expanded = false
                     onPurgeRequested()
@@ -284,15 +295,19 @@ private fun PeopleActionsMenu(onPurgeRequested: () -> Unit) {
 }
 
 /**
- * The hard-requirement unavailable state. A missing model resource or a stripped runtime makes the
+ * The hard-requirement unavailable copy. A missing model resource or a stripped runtime makes the
  * scan return *nothing*, which is indistinguishable from "this folder has no faces" — so the packaged
- * build needs a state that says which it is. Never hide this row instead of rendering it.
+ * build needs a state that says which it is. Never suppress it; it renders either as the empty
+ * screen's placeholder or, when people are already named, as a notice *above* their list.
  */
+private const val MODELS_UNAVAILABLE_MESSAGE =
+    "Face scanning unavailable — the on-device face models couldn't be loaded on this machine, so " +
+        "no new faces can be found. Existing names are unaffected, and everything else keeps working."
+
 @Composable
 private fun ModelsUnavailable(modifier: Modifier = Modifier) {
     ErrorPlaceholder(
-        message = "Face scanning unavailable — the on-device face models couldn't be loaded on this " +
-            "machine, so no faces can be found. Everything else keeps working.",
+        message = MODELS_UNAVAILABLE_MESSAGE,
         icon = Icons.Outlined.PersonSearch,
         modifier = modifier,
     )
@@ -341,10 +356,12 @@ private fun PeopleGrid(
                 imageLoader = imageLoader,
                 onName = { onName(card.id, it) },
                 onNameEdited = onNameEdited,
+                // ONE verdict button, not two. "Skip" and "Not a person" would persist the identical
+                // flag, and shipping two differently-labelled controls that do the same thing
+                // promises a distinction the model doesn't keep ("never ask again" vs "later").
+                // The section below is named for both readings instead.
                 secondaryLabel = "Skip",
                 onSecondary = { onDismiss(card.id) },
-                tertiaryLabel = "Not a person",
-                onTertiary = { onDismiss(card.id) },
             )
         }
         section("Named", state.named) { card ->
@@ -355,7 +372,7 @@ private fun PeopleGrid(
                 onNameEdited = onNameEdited,
             )
         }
-        section("Skipped", state.skipped) { card ->
+        section("Skipped / not people", state.skipped) { card ->
             PersonCardView(
                 card = card,
                 imageLoader = imageLoader,
@@ -390,9 +407,10 @@ private fun LazyGridScope.section(
 }
 
 /**
- * One cluster: its cover crop, how many photos it spans, an inline name field, and up to two verdict
- * actions. Editing state is local to the card and re-seeded when the person changes ([remember] keyed
- * on the id), so a rescan reshuffling the list can't strand a half-typed name on someone else's card.
+ * One cluster: its cover crop, how many photos it spans, an inline name field, and at most one
+ * verdict action ("Skip" while unnamed, "Bring back" once skipped). Editing state is local to the
+ * card and re-seeded when the person changes ([remember] keyed on the id), so a rescan reshuffling
+ * the list can't strand a half-typed name on someone else's card.
  */
 @Composable
 private fun PersonCardView(
@@ -402,8 +420,6 @@ private fun PersonCardView(
     onNameEdited: () -> Unit,
     secondaryLabel: String? = null,
     onSecondary: (() -> Unit)? = null,
-    tertiaryLabel: String? = null,
-    onTertiary: (() -> Unit)? = null,
 ) {
     var draft by remember(card.id) { mutableStateOf(card.name.orEmpty()) }
     Column(verticalArrangement = Arrangement.spacedBy(AppTheme.spacing.xs)) {
@@ -454,15 +470,8 @@ private fun PersonCardView(
             },
             modifier = Modifier.fillMaxWidth(),
         )
-        if (secondaryLabel != null || tertiaryLabel != null) {
-            Row(horizontalArrangement = Arrangement.spacedBy(AppTheme.spacing.xs)) {
-                if (secondaryLabel != null && onSecondary != null) {
-                    AppTextButton(text = secondaryLabel, onClick = onSecondary)
-                }
-                if (tertiaryLabel != null && onTertiary != null) {
-                    AppTextButton(text = tertiaryLabel, onClick = onTertiary)
-                }
-            }
+        if (secondaryLabel != null && onSecondary != null) {
+            AppTextButton(text = secondaryLabel, onClick = onSecondary)
         }
     }
 }

@@ -16,14 +16,26 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
+import com.vishalgupta.photoselector.data.image.DiskThumbnailCache
 import com.vishalgupta.photoselector.data.image.ImageLoader
 import com.vishalgupta.photoselector.domain.faces.FaceBox
 import com.vishalgupta.photoselector.domain.model.Photo
 import com.vishalgupta.photoselector.presentation.designsystem.theme.AppTheme
 import kotlin.math.roundToInt
 
-/** Edge the source photo is decoded at for a face crop — a card-sized crop off a shared thumbnail decode. */
-private const val FACE_CROP_VIEWPORT_PX = 640
+/**
+ * Edge the source photo is decoded at for a face crop.
+ *
+ * Pinned to [DiskThumbnailCache.MAX_EDGE_PX], not chosen for sharpness: `SkikoImageLoader` only
+ * consults the on-disk cache at or below that edge, so one pixel over turns every cover crop into a
+ * full source decode — through the ImageIO bridge for HEIC/RAW — on every visit to the People screen,
+ * with nothing persisted for the next one. Thirty people would be thirty cold decodes a visit.
+ *
+ * Note this is *not* the same entry as the grid's 320px thumbnails (the edge is part of the cache
+ * key), so the first People visit still pays a decode per person — it is simply paid once, ever,
+ * rather than once per visit.
+ */
+private const val FACE_CROP_VIEWPORT_PX = DiskThumbnailCache.MAX_EDGE_PX
 
 /**
  * How much context to keep around the detector's box, as a fraction of the box's longer edge. A face
@@ -35,11 +47,11 @@ private const val FACE_CROP_PADDING = 0.45f
 /**
  * One person's face, cropped out of the photo it was found in.
  *
- * Decodes [photo] through the shared [loader] (so the crop rides the same thumbnail cache the grid
- * already warms — **no second cache**) and blits the region [box] describes, padded and squared, into
- * whatever size the caller gives it. Falls back to a neutral person glyph while the decode is in
- * flight, when it fails, or when the face has no stored box (a people sidecar written before boxes
- * were persisted).
+ * Decodes [photo] through the shared [loader] — **no second cache**, and at an edge the loader will
+ * actually persist (see [FACE_CROP_VIEWPORT_PX]) — then blits the region [box] describes, padded and
+ * squared, into whatever size the caller gives it. Falls back to a neutral person glyph while the
+ * decode is in flight, when it fails, or when the face has no stored box (a people sidecar written
+ * before boxes were persisted).
  *
  * The crop is drawn with an explicit source rect rather than an `Image` + `ContentScale`, because the
  * region is not the whole bitmap: `ContentScale.Crop` would centre-crop the *photo*, not the face.

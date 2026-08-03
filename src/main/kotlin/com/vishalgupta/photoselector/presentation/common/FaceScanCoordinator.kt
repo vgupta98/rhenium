@@ -79,9 +79,6 @@ class FaceScanCoordinator(
     /** Live progress of the running scan; null while idle or inside the grace window. */
     val progress: StateFlow<BackgroundPassCoordinator.Progress?> get() = pass.progress
 
-    /** True while a scan is in flight — gates the Stop affordance. */
-    val isScanning: Boolean get() = pass.isRunning
-
     /** Scans [photos], or attaches to the scan already running over the same slice. */
     fun scan(photos: List<Photo>): Deferred<List<Person>> = pass.passFor(photos)
 
