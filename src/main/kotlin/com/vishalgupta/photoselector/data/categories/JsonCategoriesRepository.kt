@@ -55,6 +55,10 @@ class JsonCategoriesRepository(
     // [resolveJob] handle on rebind / [clearContext] (mirrors GroupingCoordinator's decoupled pass).
     private val scope: CoroutineScope,
     private val idGenerator: () -> CategoryId = { CategoryId(UUID.randomUUID().toString()) },
+    // Fired after a category is deleted, so whatever its rule pointed at can be disposed of in the
+    // same operation (deleting a person category forgets the person, or people leak). Injected rather
+    // than reached for, keeping this repository blind to the faces feature.
+    private val onCategoryDeleted: suspend (RootFolder, Category) -> Unit = { _, _ -> },
 ) : CategoriesRepository {
 
     private val mutex = Mutex()
@@ -95,21 +99,39 @@ class JsonCategoriesRepository(
         return readOnly.asStateFlow()
     }
 
-    override suspend fun create(root: RootFolder, name: String): CategoryId {
+    override suspend fun create(root: RootFolder, name: String, rule: CategoryRule?): CategoryId {
         if (boundRoot?.path != root.path) bind(root)
         return mutex.withLock {
-            val id = idGenerator()
-            categoriesFlow.value = categoriesFlow.value + Category(id, name.trim(), builtIn = false)
-            manualMembers = manualMembers + (id to emptySet())
+            val newId = idGenerator()
+            categoriesFlow.value = categoriesFlow.value + Category(
+                id = newId,
+                name = name.trim(),
+                builtIn = false,
+                kind = if (rule != null) CategoryKind.SMART else CategoryKind.MANUAL,
+                rule = rule,
+            )
+            if (rule != null) {
+                pins = pins + (newId to emptySet())
+                excludes = excludes + (newId to emptySet())
+            } else {
+                manualMembers = manualMembers + (newId to emptySet())
+            }
             commit(root)
-            id
+            // A rule-backed category is empty until its rule resolves; kick that off now rather than
+            // waiting for the next bind, so a freshly created person category fills straight away.
+            // Only *launches* the pass (it takes the lock from inside its own coroutine), so this is
+            // safe to do while holding it.
+            if (rule != null) launchRuleResolution(root, photosById.values.toList())
+            newId
         }
     }
 
     override suspend fun rename(root: RootFolder, id: CategoryId, newName: String) {
         require(id !in Category.BUILT_IN_IDS) { "A built-in category cannot be renamed." }
+        // Only the *seeded* smart categories are locked (a delete would just reseed them). A
+        // user-created smart category — a person — is renamable like any other bucket.
+        require(id !in Category.SMART_SEED_IDS) { "A seeded smart category cannot be renamed." }
         if (boundRoot?.path != root.path) bind(root)
-        require(!isSmart(id)) { "A smart category cannot be renamed." }
         mutex.withLock {
             categoriesFlow.value = categoriesFlow.value.map {
                 if (it.id == id) it.copy(name = newName.trim()) else it
@@ -120,13 +142,22 @@ class JsonCategoriesRepository(
 
     override suspend fun delete(root: RootFolder, id: CategoryId) {
         require(id !in Category.BUILT_IN_IDS) { "A built-in category cannot be deleted." }
+        require(id !in Category.SMART_SEED_IDS) { "A seeded smart category cannot be deleted." }
         if (boundRoot?.path != root.path) bind(root)
-        require(!isSmart(id)) { "A smart category cannot be deleted." }
-        mutex.withLock {
+        val deleted = mutex.withLock {
+            val category = categoriesFlow.value.firstOrNull { it.id == id }
             categoriesFlow.value = categoriesFlow.value.filterNot { it.id == id }
             manualMembers = manualMembers - id
+            pins = pins - id
+            excludes = excludes - id
+            ruleMatches = ruleMatches - id
+            preservedUnknownRuleById = preservedUnknownRuleById - id
             commit(root)
+            category
         }
+        // Outside the lock: the hook may touch another repository, and holding this one's mutex
+        // across a foreign suspend call is how deadlocks get written.
+        deleted?.let { onCategoryDeleted(root, it) }
     }
 
     override suspend fun toggleMembership(root: RootFolder, id: CategoryId, photo: PhotoId): Boolean {
@@ -321,20 +352,31 @@ class JsonCategoriesRepository(
      * flow and prunes now-redundant overrides (a pin the rule now matches; an exclude for a photo the
      * rule no longer matches). Decoupled from bind like the Similarity pass — for the RAW rule it is
      * effectively instant. A stale pass (root changed underneath it) bails on the boundRoot check.
+     *
+     * **A rule no resolver claims is skipped entirely, not treated as "matched nothing".** The null
+     * from [CategoryRuleResolver.resolve] is meaningful: an empty match set makes every stored pin
+     * look redundant and every stored exclude look stale, so pruning against one we never actually
+     * computed would delete the user's manual corrections from disk on the next rewrite. An unclaimed
+     * category keeps its previous [ruleMatches] (none, at bind), shows its pins, and is left out of
+     * the prune — the same "carried through untouched" treatment an unknown DTO rule type gets.
      */
     private fun launchRuleResolution(root: RootFolder, scanned: List<Photo>) {
         val smart = categoriesFlow.value.filter { it.kind == CategoryKind.SMART && it.rule != null }
         if (smart.isEmpty()) return
+        resolveJob?.cancel()
         resolveJob = scope.launch {
-            val computed = smart.associate { it.id to ruleResolver.resolve(it.rule!!, scanned) }
+            val computed = smart.mapNotNull { category ->
+                ruleResolver.resolve(category.rule!!, scanned)?.let { category.id to it }
+            }.toMap()
             mutex.withLock {
                 if (boundRoot?.path != root.path) return@withLock
-                ruleMatches = computed
+                // Only overwrite what was actually resolved; an unclaimed category keeps what it had.
+                ruleMatches = ruleMatches + computed
                 var overridesChanged = false
                 val prunedPins = pins.toMutableMap()
                 val prunedExcludes = excludes.toMutableMap()
                 for (cat in smart) {
-                    val matches = computed[cat.id].orEmpty()
+                    val matches = computed[cat.id] ?: continue // unclaimed - never prune against a guess
                     val p = pins[cat.id].orEmpty()
                     val keptPins = p - matches // a pin the rule now matches is redundant
                     if (keptPins != p) { prunedPins[cat.id] = keptPins; overridesChanged = true }
@@ -470,11 +512,14 @@ class JsonCategoriesRepository(
 
     private fun CategoryRule.toDto(): CategoryRuleDto = when (this) {
         CategoryRule.RawFiles -> CategoryRuleDto(CategoryRuleDto.RAW_FILES)
+        is CategoryRule.Person -> CategoryRuleDto(CategoryRuleDto.PERSON, personId = personId)
     }
 
-    // An unknown future rule type decodes to null → treated as manual (safe forward-compat).
+    // An unknown future rule type decodes to null → treated as manual (safe forward-compat). A
+    // person rule missing its id is likewise unusable, so it takes the same safe path.
     private fun CategoryRuleDto.toDomain(): CategoryRule? = when (type) {
         CategoryRuleDto.RAW_FILES -> CategoryRule.RawFiles
+        CategoryRuleDto.PERSON -> personId?.let { CategoryRule.Person(it) }
         else -> null
     }
 

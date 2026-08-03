@@ -2,6 +2,7 @@ package com.vishalgupta.photoselector.testing
 
 import com.vishalgupta.photoselector.domain.model.Category
 import com.vishalgupta.photoselector.domain.model.CategoryId
+import com.vishalgupta.photoselector.domain.model.CategoryRule
 import com.vishalgupta.photoselector.domain.model.PhotoId
 import com.vishalgupta.photoselector.domain.model.RootFolder
 import com.vishalgupta.photoselector.domain.repository.CategoriesRepository
@@ -28,7 +29,7 @@ class FakeCategoriesRepository(
     override fun observeCategories(root: RootFolder): StateFlow<List<Category>> = cats.asStateFlow()
     override fun observeMemberships(root: RootFolder): StateFlow<Map<CategoryId, Set<PhotoId>>> = members.asStateFlow()
     override fun isReadOnly(root: RootFolder): StateFlow<Boolean> = readOnly.asStateFlow()
-    override suspend fun create(root: RootFolder, name: String): CategoryId = error("unused")
+    override suspend fun create(root: RootFolder, name: String, rule: CategoryRule?): CategoryId = error("unused")
     override suspend fun rename(root: RootFolder, id: CategoryId, newName: String) {}
     override suspend fun delete(root: RootFolder, id: CategoryId) {}
 

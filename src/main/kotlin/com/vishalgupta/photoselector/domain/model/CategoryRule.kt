@@ -12,6 +12,15 @@ package com.vishalgupta.photoselector.domain.model
 sealed interface CategoryRule {
     /** Matches camera RAW files, classified by file extension (the non-AI demo rule). */
     data object RawFiles : CategoryRule
+
+    /**
+     * Matches every photo a given person appears in, per the face pipeline's clustering.
+     *
+     * The id is carried as a plain [String] rather than a `PersonId` so the rule model stays
+     * independent of `domain/faces` (it is also exactly what persists). The lookup from id to photos
+     * lives in the resolver, not here — a rule remains a *description*, never a resolved snapshot.
+     */
+    data class Person(val personId: String) : CategoryRule
 }
 
 /**
@@ -22,8 +31,33 @@ sealed interface CategoryRule {
  * resolver reaches into the data layer.
  */
 interface CategoryRuleResolver {
-    /** The set of photos [rule] naturally matches within [photos]. Pins/excludes are not its concern. */
-    suspend fun resolve(rule: CategoryRule, photos: List<Photo>): Set<PhotoId>
+    /**
+     * The set of photos [rule] naturally matches within [photos], or **null** when this resolver does
+     * not handle that rule type — the same "not mine, ask the next one" signal
+     * [com.vishalgupta.photoselector.data.format.CompositeCaptureMetadataSource] fans out on.
+     * Pins/excludes are not a resolver's concern.
+     */
+    suspend fun resolve(rule: CategoryRule, photos: List<Photo>): Set<PhotoId>?
+}
+
+/**
+ * Fans a rule across several rule-scoped [CategoryRuleResolver]s: the first one that *claims* the
+ * rule type (returns non-null) wins. Each delegate is blind to the others' rule types, so order
+ * affects cost, not correctness. No claimant yields null, which the repository treats exactly like an
+ * unknown rule — the category shows its manual pins only, and its stored rule is carried through
+ * untouched.
+ */
+class CompositeCategoryRuleResolver(
+    private val resolvers: List<CategoryRuleResolver>,
+) : CategoryRuleResolver {
+    constructor(vararg resolvers: CategoryRuleResolver) : this(resolvers.toList())
+
+    override suspend fun resolve(rule: CategoryRule, photos: List<Photo>): Set<PhotoId>? {
+        for (resolver in resolvers) {
+            resolver.resolve(rule, photos)?.let { return it }
+        }
+        return null
+    }
 }
 
 /**
@@ -35,8 +69,9 @@ interface CategoryRuleResolver {
 class RawFilesResolver(rawExtensions: Set<String>) : CategoryRuleResolver {
     private val rawExtensions: Set<String> = rawExtensions.mapTo(HashSet()) { it.lowercase() }
 
-    override suspend fun resolve(rule: CategoryRule, photos: List<Photo>): Set<PhotoId> = when (rule) {
+    override suspend fun resolve(rule: CategoryRule, photos: List<Photo>): Set<PhotoId>? = when (rule) {
         CategoryRule.RawFiles -> photos.filterTo(LinkedHashSet()) { it.isRaw() }.mapTo(LinkedHashSet()) { it.id }
+        else -> null
     }
 
     private fun Photo.isRaw(): Boolean =

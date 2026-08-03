@@ -24,15 +24,18 @@ architecture, single Gradle module: `domain` (pure) → `data` (impls) →
 
 ## domain/ — pure, no framework deps
 
-- `model/` — entities: `Photo`, `PhotoId`, `RootFolder`, `Category` (now carries a
+- `model/` — entities: `Photo`, `PhotoId`, `RootFolder` (also owns the per-root sidecar
+  file names, incl. `peopleFile`), `Category` (now carries a
   `kind: CategoryKind` (`MANUAL | SMART`, orthogonal to `builtIn`) and a nullable
   `rule: CategoryRule`; seeds `smartRaw()`/`smartSeeds`), `CategoryId`, `CategoryRule`
-  (`CategoryRule.RawFiles` + the `CategoryRuleResolver` seam and its pure
-  `RawFilesResolver` — extension classification over an injected RAW-extension set),
+  (`RawFiles | Person(personId)` + the `CategoryRuleResolver` seam, the pure
+  `RawFilesResolver` — extension classification over an injected RAW-extension set — and
+  `CompositeCategoryRuleResolver`, which chains resolvers "first to claim the rule wins"),
   `PhotoGroup` (`Single | Burst`; `Burst.keyIndex` = representative frame),
   `DecodedImage`, `ScanProgress`.
 - `repository/` — interfaces: `PhotoRepository`, `CategoriesRepository`,
-  `BrowsePositionRepository`, `AppPreferencesRepository`, `PhotoExporter`, `PhotoTrash`.
+  `BrowsePositionRepository`, `AppPreferencesRepository`, `PhotoExporter`, `PhotoTrash`,
+  `PeopleRepository`.
 - `usecase/` — `ScanRootFolderUseCase`, `CopyPhotosToFolderUseCase`,
   `ExportPhotosTxtUseCase`, `ExportPhotosXmpUseCase`, `MovePhotosToTrashUseCase`.
 - `grouping/` — the grouping seam: `PhotoGrouper` (an interface with one suspend
@@ -41,6 +44,14 @@ architecture, single Gradle module: `domain` (pure) → `data` (impls) →
   `fixed()` the legacy constant floor; plus a `JoinRule` seam, `timeBoosted`
   default adds same-moment frames via the capture-time gap, `VisualOnly` the
   no-time fallback), `CaptureMetadata` + `CaptureMetadataSource`.
+- `faces/` — the face pipeline's pure half, mirroring `grouping/`: `Face.kt` (`FaceId`,
+  `FaceBox`/`FacePoint`, `FaceDetection`, the `FaceEmbedding` value class, `PhotoFaces`),
+  `Person.kt` (`PersonId`, `Person`), the `FaceDetector` / `FaceEmbedder` seams, and three
+  algorithm objects: `YuNetPostProcessing` (grid decode + NMS + letterbox mapping, ported from
+  OpenCV's `face_detect.cpp`), `FaceAlignment` (5-point similarity transform onto SFace's
+  112x112 template), `FaceClusterer` (average-linkage agglomerative over cosine distance behind a
+  `ThresholdRule` seam; a recluster re-matches named people by centroid first).
+  `PersonCategoryRuleResolver` bridges a person to a smart category.
 - `format/` — `PhotoDecoder`, `PhotoFormat`, `PhotoFormatRegistry` interfaces.
 - `update/` — the notify-only update checker: `AppVersion` (tolerant SemVer +
   `rolloutBucket`), `UpdateManifest`/`UpdateStatus`, the `UpdateRepository` seam, and
@@ -74,6 +85,12 @@ architecture, single Gradle module: `domain` (pure) → `data` (impls) →
   `SharpnessScorer`, `PhotoFeatureExtractor` (+ `PhotoFeatures`), `EmbeddingCache`,
   `SimilarityPhotoGrouper` (adapter onto `PhotoGrouper`); `GroupingResultCache` +
   `CachingPhotoGrouper` (memoize the computed grouping so lens re-entry is instant).
+- `faces/` — the face pipeline's impure half, mirroring `ai/`: `OnnxFaceDetector` (YuNet) and
+  `OnnxFaceEmbedder` (SFace) — same `Loader.fromResource()` / probed-`dimensions` /
+  null-on-failure shape as `OnnxEmbeddingModel`, lazily constructed in DI; `FaceCache` (per-photo
+  detections + embeddings); `FaceScanner` (the bounded-parallel whole-root pass, structured like
+  `SimilarityPhotoGrouper.group`); `JsonPeopleRepository` + `PeopleFile` (the v1
+  `.photo-selector-people.json` sidecar, unknown fields carried through a rewrite).
 - `prefs/` — `JsonAppPreferences` (global one-off flags: the first-run Similarity
   coachmark "seen" bit, plus the update checker's opt-out / skipped-version / stable
   rollout install-id; one small JSON via `AtomicJsonWriter`). Per-root
@@ -89,7 +106,10 @@ architecture, single Gradle module: `domain` (pure) → `data` (impls) →
   `rhenium:managedRating` ownership stamp, re-serializes),
   `CompositePhotoExporter`.
 - `trash/` — `DesktopPhotoTrash` (move-to-Trash via AWT Desktop).
-- `io/` — `AtomicJsonWriter` (shared atomic JSON write; categories + browse).
+- `io/` — `AtomicJsonWriter` (shared atomic JSON write; categories + browse) and
+  `ShardedBlobCache` (the shared hash -> shard -> atomic-write -> size-capped-eviction mechanics
+  behind `EmbeddingCache` / `GroupingResultCache` / `FaceCache`; each cache keeps its **own** key
+  composition, which is byte-pinned by golden-key tests).
 
 ## presentation/ — Compose + view models, by screen
 
@@ -181,6 +201,7 @@ architecture, single Gradle module: `domain` (pure) → `data` (impls) →
 | Decoding a new format | `domain/format/PhotoDecoder.kt`, `data/format/DefaultPhotoFormatRegistry.kt`, register in `di/AppContainer.kt` |
 | HEIC / RAW specifics | `data/format/HeicDecoder.kt`, `data/format/RawDecoder.kt`, `data/format/macos/MacImageIO.kt` |
 | Similarity embeddings / model swap | `data/ai/OnnxEmbeddingModel.kt`, `data/ai/EmbeddingCache.kt`, `tools/embedding-model/` |
+| Faces / people (detect, cluster, name) | `domain/faces/`, `data/faces/`, `domain/repository/PeopleRepository.kt`, `di/AppContainer.kt` (lazy sessions + the composite rule resolver), `tools/face-models/` |
 | Inspect (grid + browse toggle) | `presentation/inspect/`, `presentation/survey/`, `presentation/browser/` |
 | Adding a screen | `presentation/navigation/Screen.kt`, `App.kt`, `di/AppContainer.kt` |
 | Theming / new shared component | `presentation/designsystem/` (theme → atom → molecule → organism) |
@@ -196,4 +217,7 @@ architecture, single Gradle module: `domain` (pure) → `data` (impls) →
 - `tools/embedding-model/` — reproducible export of the bundled similarity ONNX
   model (pinned `requirements.txt`, `export_mobilenetv3.py`, expected SHA-256 in
   its `README.md`).
+- `tools/face-models/` — reproducible *fetch* (not export) of the bundled YuNet + SFace
+  blobs from a pinned opencv_zoo commit, verified against that commit's LFS hashes;
+  licence provenance and expected SHA-256s in its `README.md`.
 - `scripts/dry-run-release.sh` — local dry-run of the release logic.

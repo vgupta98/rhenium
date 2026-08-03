@@ -19,6 +19,11 @@ import com.vishalgupta.photoselector.data.ai.GroupingResultCache
 import com.vishalgupta.photoselector.data.ai.OnnxEmbeddingModel
 import com.vishalgupta.photoselector.data.ai.PhotoFeatureExtractor
 import com.vishalgupta.photoselector.data.ai.SimilarityPhotoGrouper
+import com.vishalgupta.photoselector.data.faces.FaceCache
+import com.vishalgupta.photoselector.data.faces.FaceScanner
+import com.vishalgupta.photoselector.data.faces.JsonPeopleRepository
+import com.vishalgupta.photoselector.data.faces.OnnxFaceDetector
+import com.vishalgupta.photoselector.data.faces.OnnxFaceEmbedder
 import com.vishalgupta.photoselector.data.trash.DesktopPhotoTrash
 import com.vishalgupta.photoselector.data.format.CachingCaptureMetadataSource
 import com.vishalgupta.photoselector.data.format.CompositeCaptureMetadataSource
@@ -33,9 +38,16 @@ import com.vishalgupta.photoselector.data.format.SkiaImageDecoding
 import com.vishalgupta.photoselector.data.image.DiskThumbnailCache
 import com.vishalgupta.photoselector.data.image.ImageLoader
 import com.vishalgupta.photoselector.data.image.SkikoImageLoader
+import com.vishalgupta.photoselector.domain.faces.FaceDetector
+import com.vishalgupta.photoselector.domain.faces.FaceEmbedder
+import com.vishalgupta.photoselector.domain.faces.PersonCategoryRuleResolver
+import com.vishalgupta.photoselector.domain.faces.PersonId
+import com.vishalgupta.photoselector.domain.faces.YuNetPostProcessing
 import com.vishalgupta.photoselector.domain.format.PhotoFormatRegistry
 import com.vishalgupta.photoselector.domain.grouping.PhotoGrouper
 import com.vishalgupta.photoselector.domain.grouping.SimilarityGrouper
+import com.vishalgupta.photoselector.domain.model.CategoryRule
+import com.vishalgupta.photoselector.domain.model.CompositeCategoryRuleResolver
 import com.vishalgupta.photoselector.domain.model.DecodedImage
 import com.vishalgupta.photoselector.domain.model.Photo
 import com.vishalgupta.photoselector.domain.model.PhotoId
@@ -43,6 +55,7 @@ import com.vishalgupta.photoselector.domain.model.RawFilesResolver
 import com.vishalgupta.photoselector.domain.model.RootFolder
 import com.vishalgupta.photoselector.domain.repository.BrowsePosition
 import com.vishalgupta.photoselector.domain.repository.CategoriesRepository
+import com.vishalgupta.photoselector.domain.repository.PeopleRepository
 import com.vishalgupta.photoselector.domain.repository.AppPreferencesRepository
 import com.vishalgupta.photoselector.domain.repository.BrowsePositionRepository
 import com.vishalgupta.photoselector.domain.repository.PhotoExporter
@@ -212,6 +225,15 @@ class AppContainer {
         null
     }
 
+    // Faces decode at the detector's own input edge: YuNet is trained to find faces roughly
+    // 10-300px across, so a 640px canvas is the resolution its priors expect. A smaller decode
+    // loses far-away faces; a larger one just gets letterboxed back down.
+    private suspend fun decodeForFaces(photo: Photo): DecodedImage? = try {
+        formatRegistry.decoderFor(photo.absolutePath)?.decode(photo.absolutePath, YuNetPostProcessing.INPUT_EDGE)
+    } catch (_: Throwable) {
+        null
+    }
+
     private suspend fun decodeForSharpness(photo: Photo): DecodedImage? = try {
         // decode caps large frames at SHARPNESS_EDGE_PX; scaleUpToLongEdge brings smaller ones up to
         // it, so every frame is scored on one canonical canvas (rationale in scaleUpToLongEdge's kdoc).
@@ -222,16 +244,70 @@ class AppContainer {
         null
     }
 
+    // ---- Faces -------------------------------------------------------------------------------
+    // Both ONNX sessions are `by lazy`, unlike the eager `embeddingModel` above: a user who never
+    // scans for faces should pay neither the session-open cost nor the memory. Construction is
+    // fail-soft — a missing/unloadable blob means "face scanning unavailable" (faceScanner stays
+    // null), never a broken app, exactly as the embedder falls back to the classical model.
+    private val faceDetector: FaceDetector? by lazy {
+        runCatching { OnnxFaceDetector.Loader.fromResource() }
+            .onFailure { System.err.println("Face detector unavailable: ${it.message}") }
+            .getOrNull()
+    }
+    private val faceEmbedder: FaceEmbedder? by lazy {
+        runCatching { OnnxFaceEmbedder.Loader.fromResource() }
+            .onFailure { System.err.println("Face embedder unavailable: ${it.message}") }
+            .getOrNull()
+    }
+
+    /**
+     * The whole-root face pass, or null when either model failed to load. Lazy all the way down, so
+     * nothing here is touched until something actually asks for a scan.
+     */
+    val faceScanner: FaceScanner? by lazy {
+        val detector = faceDetector ?: return@lazy null
+        val embedder = faceEmbedder ?: return@lazy null
+        FaceScanner(
+            detector = detector,
+            embedder = embedder,
+            cache = FaceCache(cacheDir = cacheDir, detectorId = detector.id, embedderId = embedder.id)
+                .also { it.startEviction(appScope) },
+            decode = ::decodeForFaces,
+            concurrency = decodeParallelism,
+        )
+    }
+
+    private val peopleRepository: PeopleRepository = JsonPeopleRepository(json)
+
     private val photoRepository: PhotoRepository = FileSystemPhotoRepository(formatRegistry)
     private val categoriesRepository: CategoriesRepository =
         JsonCategoriesRepository(
             json = json,
             scannedPhotos = { root -> photosFor(root) },
-            // "What is RAW" has one source of truth — the RAW decoder's extension set (the object is
-            // available regardless of platform; only its decoder registration is macOS-gated).
-            ruleResolver = RawFilesResolver(RawDecoder.Companion.RawFormat.extensions),
+            // One resolver per rule type, chained like the capture-metadata sources: the first to
+            // claim a rule wins, and a new rule is one more entry here plus its resolver.
+            ruleResolver = CompositeCategoryRuleResolver(
+                // "What is RAW" has one source of truth — the RAW decoder's extension set (the object is
+                // available regardless of platform; only its decoder registration is macOS-gated).
+                RawFilesResolver(RawDecoder.Companion.RawFormat.extensions),
+                // The people index is per root, and the categories repository only ever resolves
+                // against the *scanned* root — so hand the lookup that root, which binds the people
+                // repository on demand. With no scanned root there is no authoritative answer, and
+                // the resolver must say so (null) rather than report "no photos": see
+                // PersonCategoryRuleResolver, a wrong empty answer prunes the user's pins/excludes
+                // off disk.
+                PersonCategoryRuleResolver(
+                    photosOf = { personId -> scannedRoot?.let { peopleRepository.photosOf(it, personId) } },
+                ),
+            ),
             // The async rule pass rides the app scope and is cancelled per root via clearContext (in reset).
             scope = appScope,
+            // Deleting a person's category forgets the person too, so the two models can't drift.
+            onCategoryDeleted = { root, category ->
+                (category.rule as? CategoryRule.Person)?.let {
+                    peopleRepository.delete(root, PersonId(it.personId))
+                }
+            },
         )
     private val browsePositionRepository: BrowsePositionRepository = JsonBrowsePositionRepository(json)
     // Global one-off flags (the first-run Similarity coachmark "seen" bit). One small JSON doc in the
@@ -542,6 +618,7 @@ class AppContainer {
         _folderJob.cancel()
         _folderJob = SupervisorJob(appScope.coroutineContext[Job])
         categoriesRepository.clearContext()
+        peopleRepository.clearContext()
         imageLoader.evictAll()
         scannedRoot = null
         scannedPhotos = emptyList()

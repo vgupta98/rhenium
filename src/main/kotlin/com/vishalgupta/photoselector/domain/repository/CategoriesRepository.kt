@@ -2,6 +2,7 @@ package com.vishalgupta.photoselector.domain.repository
 
 import com.vishalgupta.photoselector.domain.model.Category
 import com.vishalgupta.photoselector.domain.model.CategoryId
+import com.vishalgupta.photoselector.domain.model.CategoryRule
 import com.vishalgupta.photoselector.domain.model.PhotoId
 import com.vishalgupta.photoselector.domain.model.RootFolder
 import kotlinx.coroutines.flow.StateFlow
@@ -27,13 +28,21 @@ interface CategoriesRepository {
     /** Membership for every category at once, keyed by id. */
     fun observeMemberships(root: RootFolder): StateFlow<Map<CategoryId, Set<PhotoId>>>
 
-    /** Creates a new custom category and returns its generated id. */
-    suspend fun create(root: RootFolder, name: String): CategoryId
+    /**
+     * Creates a new custom category and returns its generated id. Pass a [rule] to create a **smart**
+     * category (e.g. `CategoryRule.Person`) that self-fills from it; the default `null` creates the
+     * ordinary manual bucket.
+     */
+    suspend fun create(root: RootFolder, name: String, rule: CategoryRule? = null): CategoryId
 
-    /** Renames a category. Throws if [id] is the built-in Favourites. */
+    /** Renames a category. Throws for a built-in or a seeded smart category (see [Category.SMART_SEED_IDS]). */
     suspend fun rename(root: RootFolder, id: CategoryId, newName: String)
 
-    /** Deletes a category. Throws if [id] is the built-in Favourites. */
+    /**
+     * Deletes a category. Throws for a built-in or a seeded smart category. Deleting a rule-backed
+     * category also disposes of whatever the rule pointed at (a person category forgets its person),
+     * so the two models can never drift.
+     */
     suspend fun delete(root: RootFolder, id: CategoryId)
 
     /** Toggles [photo]'s membership in [id]; returns true if it is now a member. */
